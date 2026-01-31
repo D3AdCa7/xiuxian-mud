@@ -27,23 +27,38 @@ export const MONSTER_LIST: MonsterConfig[] = [
   // === 筑基期怪物（外围森林）===
   { name: '蛊雕', description: '状如雕而有角，其音如婴儿，食人', minPower: 100, maxPower: 200, realmRequired: '筑基期', drops: ['灵羽', '聚灵丹'], rarity: 'common' },
   { name: '毕方', description: '状如鹤，一足，赤文青质而白喙', minPower: 120, maxPower: 220, realmRequired: '筑基期', drops: ['火羽', '培元丹'], rarity: 'common' },
-  { name: '青耕', description: '状如鹊，青身白喙，白目白尾', minPower: 150, maxPower: 280, realmRequired: '筑基期', drops: ['木灵珠'], rarity: 'rare' },
-  { name: '飞廉', description: '鹿身，头如雀，有角，蛇尾豹文', minPower: 200, maxPower: 400, realmRequired: '筑基期', drops: ['筑基丹', '风灵珠'], rarity: 'epic' },
+  { name: '诸怀', description: '状如牛，四角、人目、彘耳', minPower: 150, maxPower: 250, realmRequired: '筑基期', drops: ['妖兽内丹', '灵石'], rarity: 'common' },
+  { name: '猾褢', description: '状如人而彘鬣，穴居而冬蛰', minPower: 180, maxPower: 300, realmRequired: '筑基期', drops: ['聚灵丹'], rarity: 'common' },
+  { name: '青耕', description: '状如鹊，青身白喙，白目白尾', minPower: 200, maxPower: 350, realmRequired: '筑基期', drops: ['木灵珠'], rarity: 'rare' },
+  { name: '朱厌', description: '状如猿，白首赤足，见则大兵', minPower: 250, maxPower: 450, realmRequired: '筑基期', drops: ['战意精华', '培元丹'], rarity: 'rare' },
+  { name: '飞廉', description: '鹿身，头如雀，有角，蛇尾豹文', minPower: 300, maxPower: 550, realmRequired: '筑基期', drops: ['筑基丹', '风灵珠'], rarity: 'epic' },
+  { name: '赤眼妖狼', description: '双目赤红，形如巨狼，嗜血成性', minPower: 400, maxPower: 700, realmRequired: '筑基期', drops: ['狼王牙', '血灵珠'], rarity: 'epic' },
   // 传说
-  { name: '九尾狐', description: '状如狐而九尾，其音如婴儿，能食人', minPower: 350, maxPower: 500, realmRequired: '筑基期', drops: ['九尾狐皮', '培元丹', '筑基丹'], rarity: 'legendary' },
+  { name: '九尾狐', description: '状如狐而九尾，其音如婴儿，能食人', minPower: 500, maxPower: 900, realmRequired: '筑基期', drops: ['九尾狐皮', '培元丹', '筑基丹'], rarity: 'legendary' },
 
   // === 金丹期怪物（灵脉山）===
-  { name: '烛龙', description: '人面蛇身而赤，直目正乘，其瞑乃晦，其视乃明', minPower: 500, maxPower: 1000, realmRequired: '金丹期', drops: ['龙鳞', '金丹'], rarity: 'rare' },
-  { name: '应龙', description: '有翼之龙，黄帝令应龙攻蚩尤', minPower: 800, maxPower: 1500, realmRequired: '金丹期', drops: ['应龙角', '龙血'], rarity: 'epic' },
-  { name: '夔牛', description: '状如牛，苍身而无角，一足，出入水则必风雨', minPower: 1200, maxPower: 2000, realmRequired: '金丹期', drops: ['夔牛皮', '雷灵珠'], rarity: 'legendary' },
+  { name: '蠪侄', description: '状如狸，一目而三尾', minPower: 800, maxPower: 1500, realmRequired: '金丹期', drops: ['灵眼石', '聚灵丹'], rarity: 'common' },
+  { name: '猰貐', description: '状如貙，赤目、赤喙、黄身', minPower: 1000, maxPower: 2000, realmRequired: '金丹期', drops: ['金丹', '灵石'], rarity: 'common' },
+  { name: '烛龙', description: '人面蛇身而赤，直目正乘，其瞑乃晦，其视乃明', minPower: 1500, maxPower: 3000, realmRequired: '金丹期', drops: ['龙鳞', '金丹'], rarity: 'rare' },
+  { name: '英招', description: '人面马身，有虎纹，生鸟翼', minPower: 2000, maxPower: 4000, realmRequired: '金丹期', drops: ['神羽', '培元丹'], rarity: 'rare' },
+  { name: '应龙', description: '有翼之龙，黄帝令应龙攻蚩尤', minPower: 3000, maxPower: 6000, realmRequired: '金丹期', drops: ['应龙角', '龙血'], rarity: 'epic' },
+  { name: '玄武', description: '龟蛇合体，北方神兽', minPower: 4000, maxPower: 8000, realmRequired: '金丹期', drops: ['玄武甲', '水灵珠'], rarity: 'epic' },
+  { name: '夔牛', description: '状如牛，苍身而无角，一足，出入水则必风雨', minPower: 5000, maxPower: 10000, realmRequired: '金丹期', drops: ['夔牛皮', '雷灵珠'], rarity: 'legendary' },
 
   // === 元婴期怪物（秘境入口）===
-  { name: '帝江', description: '状如黄囊，赤如丹火，六足四翼，浑敦无面目', minPower: 2000, maxPower: 5000, realmRequired: '元婴期', drops: ['混沌精华'], rarity: 'epic' },
-  { name: '饕餮', description: '羊身人面，眼在腋下，虎齿人手，食人', minPower: 3000, maxPower: 8000, realmRequired: '元婴期', drops: ['饕餮牙', '天材地宝'], rarity: 'legendary' },
+  { name: '蜚', description: '状如牛，白首，一目，蛇尾', minPower: 8000, maxPower: 15000, realmRequired: '元婴期', drops: ['疫灵珠', '金丹'], rarity: 'common' },
+  { name: '乘黄', description: '状如狐，其背上有角', minPower: 10000, maxPower: 20000, realmRequired: '元婴期', drops: ['仙狐皮', '培元丹'], rarity: 'common' },
+  { name: '帝江', description: '状如黄囊，赤如丹火，六足四翼，浑敦无面目', minPower: 15000, maxPower: 30000, realmRequired: '元婴期', drops: ['混沌精华'], rarity: 'rare' },
+  { name: '穷奇上古', description: '四凶之一，状如虎而有翼', minPower: 20000, maxPower: 40000, realmRequired: '元婴期', drops: ['凶兽之魂', '天材地宝'], rarity: 'epic' },
+  { name: '饕餮', description: '羊身人面，眼在腋下，虎齿人手，食人', minPower: 30000, maxPower: 60000, realmRequired: '元婴期', drops: ['饕餮牙', '天材地宝'], rarity: 'legendary' },
 
   // === 化神期怪物（深渊）===
-  { name: '刑天', description: '与帝争神，帝断其首，乃以乳为目，以脐为口，操干戚以舞', minPower: 8000, maxPower: 20000, realmRequired: '化神期', drops: ['神兵碎片'], rarity: 'epic' },
-  { name: '相柳', description: '九首蛇身，食于九土，其所歠所尼，即为源泽', minPower: 15000, maxPower: 50000, realmRequired: '化神期', drops: ['相柳毒血', '仙丹'], rarity: 'legendary' },
+  { name: '梼杌', description: '状如虎而犬毛，人面、虎足、猪口牙', minPower: 50000, maxPower: 100000, realmRequired: '化神期', drops: ['凶兽精血', '仙丹'], rarity: 'common' },
+  { name: '白泽', description: '能言，知万物之情', minPower: 70000, maxPower: 150000, realmRequired: '化神期', drops: ['白泽图', '神识丹'], rarity: 'rare' },
+  { name: '刑天', description: '与帝争神，帝断其首，乃以乳为目，以脐为口，操干戚以舞', minPower: 100000, maxPower: 200000, realmRequired: '化神期', drops: ['神兵碎片', '战神精华'], rarity: 'epic' },
+  { name: '蚩尤', description: '铜头铁额，食沙石，造五兵', minPower: 150000, maxPower: 300000, realmRequired: '化神期', drops: ['蚩尤战甲', '仙丹'], rarity: 'epic' },
+  { name: '相柳', description: '九首蛇身，食于九土，其所歠所尼，即为源泽', minPower: 200000, maxPower: 500000, realmRequired: '化神期', drops: ['相柳毒血', '仙丹'], rarity: 'legendary' },
+  { name: '混沌', description: '四凶之首，状如犬，四足无爪，有目不见，行不开', minPower: 300000, maxPower: 800000, realmRequired: '化神期', drops: ['混沌本源', '太乙仙丹'], rarity: 'legendary' },
 ];
 
 // 根据境界和修为获取可遇到的怪物
