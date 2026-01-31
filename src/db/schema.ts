@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, bigint, int, timestamp, date, unique, index } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, bigint, int, timestamp, date, unique, index, json } from 'drizzle-orm/mysql-core';
 
 // 修士表
 export const agents = mysqlTable('agents', {
@@ -82,6 +82,49 @@ export const equipment = mysqlTable('equipment', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// 江湖聊天表
+export const chat = mysqlTable('chat', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: varchar('agent_id', { length: 36 }).references(() => agents.id).notNull(),
+  agentName: varchar('agent_name', { length: 32 }).notNull(),
+  realm: varchar('realm', { length: 16 }).notNull(),
+  message: varchar('message', { length: 200 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 切磋记录表
+export const pvpLogs = mysqlTable('pvp_logs', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  challengerId: varchar('challenger_id', { length: 36 }).references(() => agents.id).notNull(),
+  challengerName: varchar('challenger_name', { length: 32 }).notNull(),
+  defenderId: varchar('defender_id', { length: 36 }).references(() => agents.id).notNull(),
+  defenderName: varchar('defender_name', { length: 32 }).notNull(),
+  winnerId: varchar('winner_id', { length: 36 }).notNull(),
+  winnerName: varchar('winner_name', { length: 32 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 师徒关系表
+export const mentorship = mysqlTable('mentorship', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  masterId: varchar('master_id', { length: 36 }).references(() => agents.id).notNull(),
+  discipleId: varchar('disciple_id', { length: 36 }).references(() => agents.id).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  unique('mentorship_unique').on(table.masterId, table.discipleId),
+]);
+
+// 宗门表
+export const sects = mysqlTable('sects', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: varchar('name', { length: 32 }).unique().notNull(),
+  leaderId: varchar('leader_id', { length: 36 }).references(() => agents.id).notNull(),
+  description: varchar('description', { length: 100 }),
+  memberCount: int('member_count').default(1).notNull(),
+  totalCultivation: bigint('total_cultivation', { mode: 'number' }).default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 // 怪物图鉴表
 export const bestiary = mysqlTable('bestiary', {
   id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -108,6 +151,26 @@ export const gameLogs = mysqlTable('game_logs', {
   index('idx_logs_time').on(table.createdAt),
 ]);
 
+// 战斗详细记录表
+export const combatLogs = mysqlTable('combat_logs', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  attackerId: varchar('attacker_id', { length: 36 }).references(() => agents.id).notNull(),
+  defenderId: varchar('defender_id', { length: 36 }).references(() => agents.id), // 可为空（PvE时）
+  monsterName: varchar('monster_name', { length: 32 }), // PvE时怪物名
+  result: varchar('result', { length: 16 }).notNull(), // victory/defeat
+  rounds: int('rounds').notNull(),
+  damageDealt: int('damage_dealt').notNull(),
+  damageTaken: int('damage_taken').notNull(),
+  crits: int('crits').default(0).notNull(),
+  dodges: int('dodges').default(0).notNull(),
+  fullLog: json('full_log'), // 完整战斗记录 JSON
+  rewards: json('rewards'), // 战斗奖励 JSON
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('idx_combat_attacker').on(table.attackerId),
+  index('idx_combat_time').on(table.createdAt),
+]);
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Enlightenment = typeof enlightenments.$inferSelect;
@@ -116,3 +179,4 @@ export type Monster = typeof monsters.$inferSelect;
 export type EquipmentItem = typeof equipment.$inferSelect;
 export type BestiaryEntry = typeof bestiary.$inferSelect;
 export type GameLog = typeof gameLogs.$inferSelect;
+export type CombatLog = typeof combatLogs.$inferSelect;

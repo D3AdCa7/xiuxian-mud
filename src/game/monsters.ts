@@ -81,12 +81,12 @@ export function generateMonster(cultivation: number): {
 
   // 稀有度权重
   const weights: Record<string, number> = { common: 60, rare: 25, epic: 12, legendary: 3 };
-  const totalWeight = available.reduce((sum, m) => sum + weights[m.rarity], 0);
+  const totalWeight = available.reduce((sum, m) => sum + (weights[m.rarity] || 60), 0);
   let rand = Math.random() * totalWeight;
 
   let selected: MonsterConfig | null = null;
   for (const monster of available) {
-    rand -= weights[monster.rarity];
+    rand -= weights[monster.rarity] || 60;
     if (rand <= 0) {
       selected = monster;
       break;

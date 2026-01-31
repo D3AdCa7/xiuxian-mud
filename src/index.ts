@@ -2,12 +2,12 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { createDb, type Database } from './db/client';
-import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs } from './db/schema';
+import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs, combatLogs } from './db/schema';
 import type { Agent } from './db/schema';
 import { generateApiKey } from './utils/auth';
 import { getCurrentRealm, getNextRealm, calculateStats, CULTIVATE_COOLDOWN, DAILY_RESONATE_LIMIT } from './game/realms';
 import { generateMonster, getMonsterHint, getRarityEmoji, getRarityName, MONSTER_LIST } from './game/monsters';
-import { resolveCombat } from './game/combat';
+import { resolveCombat, calculateCombatStats, calculateMonsterStats } from './game/combat';
 import { ITEMS, applyItemEffect, getRandomItem } from './game/items';
 import { generateEquipment, canEquip, getSlotName, getSlotStatName, getQualityEmoji, EQUIPMENT_LIST, type EquipmentSlot } from './game/equipment';
 
@@ -506,13 +506,55 @@ app.post('/fight', async (c) => {
     return c.json({ success: false, error: 'monster_not_found', message: '未找到该敌人' }, 400);
   }
 
-  const stats = calculateStats(agent.cultivation);
-  const combatResult = resolveCombat(stats.attack, stats.defense, agent.hp, monster.power, monster.name, monster.rewardCultivation, monster.rewardItem);
+  // 获取装备加成
+  const allEquipment = await db.query.equipment.findMany({ where: eq(equipment.agentId, agent.id) });
+  const equippedWeapon = allEquipment.find(e => e.slot === 'weapon' && e.equipped === 1);
+  const equippedArmor = allEquipment.find(e => e.slot === 'armor' && e.equipped === 1);
+  const equippedAccessory = allEquipment.find(e => e.slot === 'accessory' && e.equipped === 1);
+
+  const equipBonus = {
+    attack: equippedWeapon?.finalStat || 0,
+    defense: equippedArmor?.finalStat || 0,
+    hp: equippedAccessory?.finalStat || 0,
+  };
+
+  // 获取图鉴加成
+  const bestiaryEntry = await db.query.bestiary.findFirst({
+    where: and(eq(bestiary.agentId, agent.id), eq(bestiary.monsterName, monster.name)),
+  });
+  const bestiaryBonus = bestiaryEntry ? (bestiaryEntry.kills >= 100 ? 5 : bestiaryEntry.kills >= 50 ? 2 : 0) : 0;
+
+  // 计算战斗属性
+  const playerStats = calculateCombatStats(agent.cultivation, equipBonus, bestiaryBonus);
+  const monsterStats = calculateMonsterStats(monster.power, monster.name);
+
+  // 执行回合制战斗
+  const combatResult = resolveCombat(agent.name, playerStats, monsterStats, monster.name, monster.rewardCultivation, monster.rewardItem);
 
   await db.delete(monsters).where(eq(monsters.id, monster.id));
 
   const newHp = Math.max(1, agent.hp - combatResult.hpLost);
   let newCultivation = agent.cultivation;
+
+  // 保存战斗记录（失败不影响战斗结果）
+  const combatLogId = crypto.randomUUID();
+  try {
+    await db.insert(combatLogs).values({
+      id: combatLogId,
+      attackerId: agent.id,
+      monsterName: monster.name,
+      result: combatResult.result,
+      rounds: combatResult.rounds,
+      damageDealt: combatResult.damageDealt,
+      damageTaken: combatResult.damageTaken,
+      crits: combatResult.crits,
+      dodges: combatResult.dodges,
+      fullLog: combatResult.fullLog,
+      rewards: combatResult.rewards || null,
+    });
+  } catch (e) {
+    console.error('Failed to save combat log:', e);
+  }
 
   if (combatResult.result === 'victory') {
     newCultivation += combatResult.rewards!.cultivation;
@@ -528,9 +570,6 @@ app.post('/fight', async (c) => {
     }
 
     // 更新图鉴击杀数
-    const bestiaryEntry = await db.query.bestiary.findFirst({
-      where: and(eq(bestiary.agentId, agent.id), eq(bestiary.monsterName, monster.name)),
-    });
     if (bestiaryEntry) {
       await db.update(bestiary).set({ kills: bestiaryEntry.kills + 1 }).where(eq(bestiary.id, bestiaryEntry.id));
     }
@@ -538,7 +577,8 @@ app.post('/fight', async (c) => {
     // 记录日志
     await db.insert(gameLogs).values({
       agentId: agent.id, agentName: agent.name, action: 'fight',
-      detail: `击杀${monster.name}，获得修为${combatResult.rewards!.cultivation}`, result: 'victory',
+      detail: `${combatResult.rounds}回合击杀${monster.name}，暴击${combatResult.crits}次，获得修为${combatResult.rewards!.cultivation}`,
+      result: 'victory',
     });
   } else {
     newCultivation = Math.max(0, newCultivation - combatResult.cultivationLost);
@@ -546,7 +586,8 @@ app.post('/fight', async (c) => {
     // 记录日志
     await db.insert(gameLogs).values({
       agentId: agent.id, agentName: agent.name, action: 'fight',
-      detail: `败于${monster.name}，损失修为${combatResult.cultivationLost}`, result: 'defeat',
+      detail: `${combatResult.rounds}回合败于${monster.name}，损失修为${combatResult.cultivationLost}`,
+      result: 'defeat',
     });
   }
 
@@ -556,10 +597,25 @@ app.post('/fight', async (c) => {
   return c.json({
     success: true,
     data: {
-      result: combatResult.result, combat_log: combatResult.combatLog, rewards: combatResult.rewards,
-      cultivation_lost: combatResult.cultivationLost || 0, current_hp: newHp, current_cultivation: newCultivation, realm: newRealm.name,
+      combat_id: combatLogId,
+      result: combatResult.result,
+      rounds: combatResult.rounds,
+      combat_log: combatResult.combatLog,
+      stats: {
+        damage_dealt: combatResult.damageDealt,
+        damage_taken: combatResult.damageTaken,
+        crits: combatResult.crits,
+        dodges: combatResult.dodges,
+      },
+      rewards: combatResult.rewards,
+      cultivation_lost: combatResult.cultivationLost || 0,
+      current_hp: newHp,
+      current_cultivation: newCultivation,
+      realm: newRealm.name,
     },
-    message: combatResult.result === 'victory' ? `你击败了${monster.name}！` : `你被${monster.name}击败了...`,
+    message: combatResult.result === 'victory'
+      ? `🎉 ${combatResult.rounds}回合击败${monster.name}！暴击${combatResult.crits}次，造成${combatResult.damageDealt}伤害`
+      : `💀 ${combatResult.rounds}回合后被${monster.name}击败...`,
     hint: combatResult.result === 'victory' ? '继续探索或修炼提升实力' : '使用疗伤丹恢复，或继续修炼',
   });
 });
@@ -979,6 +1035,100 @@ app.get('/activity', async (c) => {
     success: true,
     data: { activities: summary },
     message: '灵网界最近动态',
+  });
+});
+
+// ==================== 战斗历史 ====================
+
+// 查看战斗历史
+app.get('/combat-history', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const url = new URL(c.req.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '20'), 50);
+
+  const history = await db.select()
+    .from(combatLogs)
+    .where(eq(combatLogs.attackerId, agent.id))
+    .orderBy(desc(combatLogs.createdAt))
+    .limit(limit);
+
+  const formattedHistory = history.map(h => ({
+    id: h.id,
+    opponent: h.monsterName || '切磋对手',
+    result: h.result,
+    rounds: h.rounds,
+    damage_dealt: h.damageDealt,
+    damage_taken: h.damageTaken,
+    crits: h.crits,
+    dodges: h.dodges,
+    rewards: h.rewards,
+    time: h.createdAt,
+  }));
+
+  // 统计数据
+  const totalFights = history.length;
+  const victories = history.filter(h => h.result === 'victory').length;
+  const defeats = history.filter(h => h.result === 'defeat').length;
+  const totalDamageDealt = history.reduce((sum, h) => sum + h.damageDealt, 0);
+  const totalCrits = history.reduce((sum, h) => sum + h.crits, 0);
+
+  return c.json({
+    success: true,
+    data: {
+      summary: {
+        total_fights: totalFights,
+        victories,
+        defeats,
+        win_rate: totalFights > 0 ? `${Math.round(victories / totalFights * 100)}%` : '0%',
+        total_damage_dealt: totalDamageDealt,
+        total_crits: totalCrits,
+      },
+      history: formattedHistory,
+    },
+    message: `共 ${totalFights} 场战斗，胜 ${victories} 负 ${defeats}`,
+    hint: '使用 GET /combat-history/:id 查看单场战斗详情',
+  });
+});
+
+// 查看单场战斗详情
+app.get('/combat-history/:id', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const combatId = c.req.param('id');
+
+  const combat = await db.query.combatLogs.findFirst({
+    where: and(eq(combatLogs.id, combatId), eq(combatLogs.attackerId, agent.id)),
+  });
+
+  if (!combat) {
+    return c.json({ success: false, error: 'not_found', message: '未找到该战斗记录' }, 404);
+  }
+
+  // 将完整战报格式化为可读文本
+  const fullLogArr = combat.fullLog as any[];
+  const narratives = fullLogArr?.map((round: any) => round.narrative) || [];
+
+  return c.json({
+    success: true,
+    data: {
+      id: combat.id,
+      opponent: combat.monsterName || '切磋对手',
+      result: combat.result,
+      rounds: combat.rounds,
+      stats: {
+        damage_dealt: combat.damageDealt,
+        damage_taken: combat.damageTaken,
+        crits: combat.crits,
+        dodges: combat.dodges,
+      },
+      rewards: combat.rewards,
+      battle_report: narratives,
+      time: combat.createdAt,
+    },
+    message: combat.result === 'victory'
+      ? `🎉 胜利！${combat.rounds}回合击败${combat.monsterName}`
+      : `💀 失败...${combat.rounds}回合后被${combat.monsterName}击败`,
   });
 });
 
