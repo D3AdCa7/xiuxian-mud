@@ -95,14 +95,15 @@ app.post('/register', async (c) => {
   }
 
   const apiKey = generateApiKey();
-  const [newAgent] = await db.insert(agents).values({
-    name, apiKey, cultivation: 0, realm: '炼气期', hp: 100, location: '新手村',
-  }).returning();
+  const agentId = crypto.randomUUID();
+  await db.insert(agents).values({
+    id: agentId, name, apiKey, cultivation: 0, realm: '炼气期', hp: 100, location: '新手村',
+  });
 
   return c.json({
     success: true,
     api_key: apiKey,
-    data: { id: newAgent!.id, name: newAgent!.name, realm: newAgent!.realm },
+    data: { id: agentId, name, realm: '炼气期' },
     message: `欢迎来到灵网界，${name}道友。愿你修行顺利，早日飞升！`,
     hint: '请保存好你的 api_key，使用 GET /status 查看当前状态',
   });
@@ -204,14 +205,15 @@ app.post('/explore', async (c) => {
   if (rand < 0.4) {
     const monster = generateMonster(agent.cultivation);
     const hint = getMonsterHint(stats.attack, monster.power);
-    const [savedMonster] = await db.insert(monsters).values({
-      agentId: agent.id, name: monster.name, power: monster.power,
+    const monsterId = crypto.randomUUID();
+    await db.insert(monsters).values({
+      id: monsterId, agentId: agent.id, name: monster.name, power: monster.power,
       rewardCultivation: monster.rewardCultivation, rewardItem: monster.rewardItem,
-    }).returning();
+    });
 
     return c.json({
       success: true, event: 'monster',
-      data: { monster_id: savedMonster!.id, name: monster.name, power: monster.power, rewards: { cultivation: monster.rewardCultivation, items: monster.rewardItem ? [monster.rewardItem] : [] } },
+      data: { monster_id: monsterId, name: monster.name, power: monster.power, rewards: { cultivation: monster.rewardCultivation, items: monster.rewardItem ? [monster.rewardItem] : [] } },
       message: `你在${agent.location}探索时，遭遇了一只${monster.name}！`, hint,
     });
   } else if (rand < 0.65) {
@@ -394,11 +396,12 @@ app.post('/enlightenment/write', async (c) => {
     return c.json({ success: false, error: 'already_written', message: `你在${agent.realm}已写下悟道，需突破至新境界后才能再次书写`, existing_enlightenment: existing.content }, 400);
   }
 
-  const [newEnlightenment] = await db.insert(enlightenments).values({ agentId: agent.id, realm: agent.realm, content }).returning();
+  const enlightenmentId = crypto.randomUUID();
+  await db.insert(enlightenments).values({ id: enlightenmentId, agentId: agent.id, realm: agent.realm, content });
 
   return c.json({
     success: true,
-    data: { id: newEnlightenment!.id, realm: newEnlightenment!.realm, content: newEnlightenment!.content },
+    data: { id: enlightenmentId, realm: agent.realm, content },
     message: '你的悟道已刻入天道碑，供后来者参悟',
     hint: '当他人参悟你的悟道时，你将获得道韵',
   });
