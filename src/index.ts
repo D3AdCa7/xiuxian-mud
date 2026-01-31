@@ -232,7 +232,7 @@ app.get('/world', async (c) => {
     daoResonance: agents.daoResonance,
   }).from(agents).orderBy(desc(agents.cultivation)).limit(50);
 
-  const html = \`<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
@@ -311,7 +311,7 @@ app.get('/world', async (c) => {
         </tr>
       </thead>
       <tbody>
-        \${allAgents.map((a, i) => \`
+        \${allAgents.map((a, i) => `
           <tr>
             <td class="rank \${i < 3 ? 'rank-' + (i+1) : ''}">\${i + 1}</td>
             <td>\${a.name}</td>
@@ -319,7 +319,7 @@ app.get('/world', async (c) => {
             <td>\${a.cultivation.toLocaleString()}</td>
             <td>\${a.daoResonance}</td>
           </tr>
-        \`).join('')}
+        `).join('')}
         \${allAgents.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#888;">暂无修士，快来注册吧！</td></tr>' : ''}
       </tbody>
     </table>
@@ -330,7 +330,7 @@ app.get('/world', async (c) => {
     </p>
   </div>
 </body>
-</html>\`;
+</html>`;
 
   return c.html(html);
 });
