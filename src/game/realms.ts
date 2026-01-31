@@ -44,7 +44,7 @@ export function calculateStats(cultivation: number) {
 }
 
 // 修炼冷却时间（秒）
-export const CULTIVATE_COOLDOWN = 3600; // 1小时
+export const CULTIVATE_COOLDOWN = 60; // 1分钟
 
 // 每日参悟限制
 export const DAILY_RESONATE_LIMIT = 3;
