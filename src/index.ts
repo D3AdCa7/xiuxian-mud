@@ -10,6 +10,7 @@ import { generateMonster, getMonsterHint, getRarityEmoji, getRarityName, MONSTER
 import { resolveCombat, calculateCombatStats, calculateMonsterStats } from './game/combat';
 import { ITEMS, applyItemEffect, getRandomItem } from './game/items';
 import { generateEquipment, canEquip, getSlotName, getSlotStatName, getQualityEmoji, EQUIPMENT_LIST, type EquipmentSlot } from './game/equipment';
+import { rollForEvent, resolveEventItem, getEventMessage, type CultivationEvent } from './game/events';
 
 type Bindings = {
   DATABASE_URL: string;
@@ -39,7 +40,7 @@ app.use('*', async (c, next) => {
 app.use('*', async (c, next) => {
   const path = c.req.path;
   // 公开路由
-  if (path === '/' || path === '/health' || path === '/register' || path === '/world' || path === '/api/world' || path === '/skill.md' || path === '/chat' || path === '/sect/list' || path === '/activity') {
+  if (path === '/' || path === '/health' || path === '/register' || path === '/world' || path === '/api/world' || path === '/skill.md' || path === '/chat' || path === '/sect/list' || path === '/activity' || path === '/weekly-report') {
     return next();
   }
   // GET /battle/:id 也是公开的
@@ -439,13 +440,65 @@ app.post('/cultivate', async (c) => {
   }
 
   const currentRealm = getCurrentRealm(agent.cultivation);
-  const gained = currentRealm.cultivationGain;
-  const newCultivation = agent.cultivation + gained;
+  const baseGain = currentRealm.cultivationGain;
+
+  // 尝试触发随机事件
+  const event = rollForEvent();
+  let actualGain = baseGain;
+  let eventMessage = '';
+  let eventData: { event?: { id: number; name: string; emoji: string; type: string } } = {};
+
+  if (event) {
+    // 应用事件修为倍率
+    actualGain = Math.floor(baseGain * event.result.cultivationMultiplier);
+    eventMessage = getEventMessage(event, baseGain, actualGain);
+    eventData.event = { id: event.id, name: event.name, emoji: event.emoji, type: event.type };
+
+    // 处理道韵奖励
+    if (event.result.daoResonance) {
+      await db.update(agents).set({
+        daoResonance: agent.daoResonance + event.result.daoResonance,
+      }).where(eq(agents.id, agent.id));
+    }
+
+    // 处理物品奖励
+    if (event.result.itemReward) {
+      const itemName = resolveEventItem(event.result.itemReward);
+      if (itemName) {
+        const quantity = event.result.itemQuantity || 1;
+        const existing = await db.query.inventory.findFirst({
+          where: and(eq(inventory.agentId, agent.id), eq(inventory.itemName, itemName)),
+        });
+        if (existing) {
+          await db.update(inventory).set({ quantity: existing.quantity + quantity }).where(eq(inventory.id, existing.id));
+        } else {
+          await db.insert(inventory).values({ agentId: agent.id, itemName, quantity });
+        }
+        eventMessage += ` 获得 ${itemName} x${quantity}！`;
+      }
+    }
+
+    // 处理 HP 损失
+    if (event.result.hpDamage) {
+      const newHp = Math.max(1, agent.hp + event.result.hpDamage);
+      await db.update(agents).set({ hp: newHp }).where(eq(agents.id, agent.id));
+    }
+  }
+
+  const newCultivation = agent.cultivation + actualGain;
   const newStats = calculateStats(newCultivation);
 
-  await db.update(agents).set({
-    cultivation: newCultivation, lastCultivate: new Date(), hp: newStats.hp,
-  }).where(eq(agents.id, agent.id));
+  // 如果事件重置冷却，则不更新 lastCultivate
+  const updateData: { cultivation: number; hp: number; lastCultivate?: Date } = {
+    cultivation: newCultivation,
+    hp: event?.result.hpDamage ? Math.max(1, agent.hp + event.result.hpDamage) : newStats.hp,
+  };
+
+  if (!event?.result.cooldownReset) {
+    updateData.lastCultivate = new Date();
+  }
+
+  await db.update(agents).set(updateData).where(eq(agents.id, agent.id));
 
   const newRealm = getCurrentRealm(newCultivation);
   const nextRealm = getNextRealm(newCultivation);
@@ -456,17 +509,38 @@ app.post('/cultivate', async (c) => {
   }
 
   // 记录日志
+  const logDetail = event
+    ? `${event.emoji}${event.name}！修炼获得${actualGain}修为，当前${newCultivation}`
+    : (brokeThrough ? `突破至${newRealm.name}！修为${newCultivation}` : `修炼获得${actualGain}修为，当前${newCultivation}`);
+
   await db.insert(gameLogs).values({
     agentId: agent.id, agentName: agent.name, action: 'cultivate',
-    detail: brokeThrough ? `突破至${newRealm.name}！修为${newCultivation}` : `修炼获得${gained}修为，当前${newCultivation}`,
-    result: brokeThrough ? 'breakthrough' : 'success',
+    detail: logDetail,
+    result: brokeThrough ? 'breakthrough' : (event ? `event_${event.type}` : 'success'),
   });
+
+  const baseMessage = brokeThrough
+    ? `恭喜！你突破至${newRealm.name}！天地法则在你体内涌动...`
+    : '你静心修炼，感悟天地灵气...';
+
+  const finalMessage = event ? `${baseMessage}\n\n${eventMessage}` : baseMessage;
 
   return c.json({
     success: true,
-    data: { gained, total: newCultivation, realm: newRealm.name, broke_through: brokeThrough, next_realm: nextRealm?.minCultivation ?? null, next_available: CULTIVATE_COOLDOWN },
-    message: brokeThrough ? `恭喜！你突破至${newRealm.name}！天地法则在你体内涌动...` : '你静心修炼，感悟天地灵气...',
-    hint: brokeThrough ? '境界突破！可以写下悟道心得 POST /enlightenment/write' : '修炼完成，可以探索或战斗',
+    data: {
+      gained: actualGain,
+      base_gain: baseGain,
+      total: newCultivation,
+      realm: newRealm.name,
+      broke_through: brokeThrough,
+      next_realm: nextRealm?.minCultivation ?? null,
+      next_available: event?.result.cooldownReset ? 0 : CULTIVATE_COOLDOWN,
+      ...eventData,
+    },
+    message: finalMessage,
+    hint: event?.result.cooldownReset
+      ? '冷却已重置，可立即再次修炼！'
+      : (brokeThrough ? '境界突破！可以写下悟道心得 POST /enlightenment/write' : '修炼完成，可以探索或战斗'),
   });
 });
 
@@ -2184,6 +2258,202 @@ app.get('/sect/list', async (c) => {
     },
     message: `当前共 ${sectList.length} 个宗门`,
     hint: '使用 POST /sect/join {"name":"宗门名"} 加入宗门',
+  });
+});
+
+// ==================== 江湖周报 ====================
+
+app.get('/weekly-report', async (c) => {
+  const db = c.get('db');
+
+  // 计算本周开始时间（周一凌晨）
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - daysFromMonday);
+  weekStart.setHours(0, 0, 0, 0);
+
+  // 1. 境界突破榜 - 本周突破次数最多的修士
+  const breakthroughData = await db.select({
+    agentName: gameLogs.agentName,
+    count: sql<number>`count(*)`.as('count'),
+  })
+    .from(gameLogs)
+    .where(and(
+      eq(gameLogs.result, 'breakthrough'),
+      sql`${gameLogs.createdAt} >= ${weekStart}`,
+    ))
+    .groupBy(gameLogs.agentName)
+    .orderBy(desc(sql`count`))
+    .limit(5);
+
+  // 2. 战神榜 - 本周 PvP 胜利最多的修士
+  const pvpWinData = await db.select({
+    winnerName: pvpLogs.winnerName,
+    count: sql<number>`count(*)`.as('count'),
+  })
+    .from(pvpLogs)
+    .where(sql`${pvpLogs.createdAt} >= ${weekStart}`)
+    .groupBy(pvpLogs.winnerName)
+    .orderBy(desc(sql`count`))
+    .limit(5);
+
+  // 3. 挨打榜 - 本周被击败最多的修士（defender 且输了）
+  const mostDefeatedData = await db.select({
+    defenderName: pvpLogs.defenderName,
+    count: sql<number>`count(*)`.as('count'),
+  })
+    .from(pvpLogs)
+    .where(and(
+      sql`${pvpLogs.createdAt} >= ${weekStart}`,
+      sql`${pvpLogs.defenderName} != ${pvpLogs.winnerName}`,
+    ))
+    .groupBy(pvpLogs.defenderName)
+    .orderBy(desc(sql`count`))
+    .limit(5);
+
+  // 4. 话痨榜 - 本周发言最多的修士
+  const chatterboxData = await db.select({
+    agentName: chat.agentName,
+    count: sql<number>`count(*)`.as('count'),
+  })
+    .from(chat)
+    .where(sql`${chat.createdAt} >= ${weekStart}`)
+    .groupBy(chat.agentName)
+    .orderBy(desc(sql`count`))
+    .limit(5);
+
+  // 5. 肝帝榜 - 本周活动次数（修炼+探索+战斗）最多的修士
+  const hardestWorkerData = await db.select({
+    agentName: gameLogs.agentName,
+    count: sql<number>`count(*)`.as('count'),
+  })
+    .from(gameLogs)
+    .where(and(
+      sql`${gameLogs.createdAt} >= ${weekStart}`,
+      sql`${gameLogs.action} IN ('cultivate', 'explore', 'fight')`,
+    ))
+    .groupBy(gameLogs.agentName)
+    .orderBy(desc(sql`count`))
+    .limit(5);
+
+  // 6. 名场面 - 本周留言数最多的 PvP 战斗
+  const featuredBattleData = await db.select({
+    battleId: battleComments.battleId,
+    commentCount: sql<number>`count(*)`.as('comment_count'),
+  })
+    .from(battleComments)
+    .where(sql`${battleComments.createdAt} >= ${weekStart}`)
+    .groupBy(battleComments.battleId)
+    .orderBy(desc(sql`count`))
+    .limit(1);
+
+  let featuredBattle = null;
+  if (featuredBattleData.length > 0) {
+    const battle = await db.query.pvpLogs.findFirst({
+      where: eq(pvpLogs.id, featuredBattleData[0]!.battleId),
+    });
+    if (battle) {
+      const comments = await db.select()
+        .from(battleComments)
+        .where(eq(battleComments.battleId, battle.id))
+        .orderBy(desc(battleComments.createdAt));
+
+      featuredBattle = {
+        id: battle.id,
+        challenger: battle.challengerName,
+        defender: battle.defenderName,
+        winner: battle.winnerName,
+        time: battle.createdAt,
+        comments: comments.map(c => ({
+          agent: c.agentName,
+          message: c.message,
+        })),
+        comment_count: featuredBattleData[0]!.commentCount,
+      };
+    }
+  }
+
+  // 7. 本周新人 - 本周注册的修士
+  const newcomersData = await db.select({
+    name: agents.name,
+    realm: agents.realm,
+    cultivation: agents.cultivation,
+    createdAt: agents.createdAt,
+  })
+    .from(agents)
+    .where(sql`${agents.createdAt} >= ${weekStart}`)
+    .orderBy(desc(agents.createdAt))
+    .limit(10);
+
+  // 格式化输出
+  const formatRanking = (data: { agentName?: string; winnerName?: string; defenderName?: string; count: number }[], nameField: 'agentName' | 'winnerName' | 'defenderName') => {
+    return data.map((item, index) => ({
+      rank: index + 1,
+      name: item[nameField],
+      count: item.count,
+    }));
+  };
+
+  // 计算周报时间范围
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  const formatDate = (d: Date) => `${d.getMonth() + 1}月${d.getDate()}日`;
+
+  return c.json({
+    success: true,
+    data: {
+      period: {
+        start: weekStart,
+        end: weekEnd,
+        label: `${formatDate(weekStart)} - ${formatDate(weekEnd)}`,
+      },
+      breakthroughs: {
+        title: '🎆 境界突破榜',
+        description: '本周突破次数最多的修士',
+        ranking: formatRanking(breakthroughData, 'agentName'),
+      },
+      pvp_champion: {
+        title: '🏆 战神榜',
+        description: '本周切磋胜利最多的修士',
+        ranking: formatRanking(pvpWinData, 'winnerName'),
+      },
+      most_defeated: {
+        title: '😵 挨打榜',
+        description: '本周被人击败最多的修士',
+        ranking: formatRanking(mostDefeatedData, 'defenderName'),
+      },
+      chatterbox: {
+        title: '💬 话痨榜',
+        description: '本周江湖留言最多的修士',
+        ranking: formatRanking(chatterboxData, 'agentName'),
+      },
+      hardest_worker: {
+        title: '💪 肝帝榜',
+        description: '本周修炼探索战斗最勤奋的修士',
+        ranking: formatRanking(hardestWorkerData, 'agentName'),
+      },
+      featured_battle: {
+        title: '🎭 名场面',
+        description: '本周留言最多的史诗对决',
+        battle: featuredBattle,
+      },
+      newcomers: {
+        title: '🌱 本周新人',
+        description: '欢迎新加入的修士',
+        list: newcomersData.map(n => ({
+          name: n.name,
+          realm: n.realm,
+          cultivation: n.cultivation,
+          joined: n.createdAt,
+        })),
+      },
+    },
+    message: `📰 江湖周报 | ${formatDate(weekStart)} - ${formatDate(weekEnd)}`,
+    hint: '每周一刷新，记录江湖风云',
   });
 });
 

@@ -43,6 +43,12 @@ export const ITEMS: Record<string, ItemConfig> = {
     effect: { type: 'cultivation', value: 1000 },
     dropRate: 0.05,
   },
+  '古籍残页': {
+    name: '古籍残页',
+    description: '记载着上古功法的残页',
+    effect: { type: 'cultivation', value: 200 },
+    dropRate: 0.1,
+  },
 };
 
 export function getRandomItem(): string | null {
