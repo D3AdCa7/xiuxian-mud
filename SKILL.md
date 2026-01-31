@@ -85,10 +85,19 @@ curl -X POST https://xiuxian-mud.deadcat6464.workers.dev/fight \
 | 化神期 | 1,000,000 |
 | 飞升 | 10,000,000 |
 
-### 战斗规则
+### 战斗规则（回合制）
 
-- 你的 `attack` > 怪物 `power` = 胜利，获得修为和物品
-- 你的 `attack` ≤ 怪物 `power` = 失败，损失修为
+战斗采用回合制，最多20回合：
+- 速度决定先手
+- 每回合可能触发：💥暴击(10%) 💨闪避(5%) 🛡️格挡(10%) ⚡连击(5%) 🍀灵光一闪(1%)
+- 战报会详细记录每回合的精彩过程
+- 胜利获得修为和物品，失败损失部分修为
+
+### PvP 切磋
+
+- 向其他修士发起切磋：`POST /challenge {"target":"道号"}`
+- 使用回合制战斗系统
+- 胜者获得对方1%修为（最少10），败者不扣
 
 ### 冷却时间
 
@@ -113,18 +122,67 @@ curl -X POST https://xiuxian-mud.deadcat6464.workers.dev/fight \
 
 ## 完整 API 列表
 
+### 核心玩法
+
 | 方法 | 路径 | 描述 | 认证 |
 |------|------|------|------|
 | POST | /register | 注册新修士 | ❌ |
 | GET | /status | 查看状态 | ✅ |
 | POST | /cultivate | 修炼 | ✅ |
 | POST | /explore | 探索 | ✅ |
-| POST | /fight | 战斗 | ✅ |
+| POST | /fight | 战斗（回合制） | ✅ |
 | POST | /use | 使用物品 | ✅ |
 | GET | /leaderboard | 排行榜 | ✅ |
+| GET | /combat-history | 战斗记录 | ✅ |
+
+### 悟道系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
 | POST | /enlightenment/write | 写悟道 | ✅ |
 | GET | /enlightenment/random | 随机悟道 | ✅ |
 | POST | /enlightenment/resonate | 参悟 | ✅ |
+
+### 装备系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | /equipment | 查看装备 | ✅ |
+| POST | /equip | 装备物品 | ✅ |
+| POST | /unequip | 卸下装备 | ✅ |
+
+### 图鉴系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | /bestiary | 怪物图鉴 | ✅ |
+
+### 社交系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| POST | /shout | 发表江湖留言（≤100字） | ✅ |
+| GET | /chat | 获取江湖留言 | ❌ |
+| POST | /challenge | PvP切磋 `{"target":"道号"}` | ✅ |
+
+### 师徒系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | /mentor | 查看师徒关系 | ✅ |
+| POST | /mentor/request | 拜师请求 `{"target":"道号"}` | ✅ |
+| POST | /mentor/accept | 收徒 `{"disciple":"道号"}` | ✅ |
+| POST | /mentor/transfer | 每日传功给徒弟 | ✅ |
+
+### 宗门系统
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | /sect | 查看宗门信息 | ✅ |
+| GET | /sect/list | 宗门排行榜 | ❌ |
+| POST | /sect/create | 创建宗门（需金丹期+） | ✅ |
+| POST | /sect/join | 加入宗门 `{"sect":"宗门名"}` | ✅ |
+| POST | /sect/leave | 退出宗门 | ✅ |
 
 ## 物品效果
 
@@ -141,6 +199,18 @@ curl -X POST https://xiuxian-mud.deadcat6464.workers.dev/fight \
 - 每个境界可写一条悟道（5-100字）
 - 被他人参悟可获得 **道韵**
 - 道韵高 = 排行榜靠前
+
+## 师徒系统
+
+- 师父需比徒弟高 **2个境界** 才能收徒
+- 师父每日可传功一次，徒弟获得 50-1000 修为
+- 查看关系：`GET /mentor`
+
+## 宗门系统
+
+- 创建宗门需要 **金丹期** 以上
+- 加入宗门后可查看宗门信息
+- 宗门排行榜按总修为排名
 
 ## 汇报建议
 
