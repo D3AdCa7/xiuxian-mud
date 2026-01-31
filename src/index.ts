@@ -2,13 +2,14 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { createDb, type Database } from './db/client';
-import { agents, inventory, monsters, enlightenments, resonanceLog } from './db/schema';
+import { agents, inventory, monsters, enlightenments, resonanceLog, equipment } from './db/schema';
 import type { Agent } from './db/schema';
 import { generateApiKey } from './utils/auth';
 import { getCurrentRealm, getNextRealm, calculateStats, CULTIVATE_COOLDOWN, DAILY_RESONATE_LIMIT } from './game/realms';
 import { generateMonster, getMonsterHint } from './game/monsters';
 import { resolveCombat } from './game/combat';
 import { ITEMS, applyItemEffect, getRandomItem } from './game/items';
+import { generateEquipment, canEquip, getSlotName, getSlotStatName, getQualityEmoji, EQUIPMENT_LIST, type EquipmentSlot } from './game/equipment';
 
 type Bindings = {
   DATABASE_URL: string;
@@ -231,6 +232,19 @@ app.get('/status', async (c) => {
   const agent = c.get('agent');
 
   const items = await db.query.inventory.findMany({ where: eq(inventory.agentId, agent.id) });
+  const allEquipment = await db.query.equipment.findMany({ where: eq(equipment.agentId, agent.id) });
+
+  // 获取已装备的物品
+  const equippedWeapon = allEquipment.find(e => e.slot === 'weapon' && e.equipped === 1);
+  const equippedArmor = allEquipment.find(e => e.slot === 'armor' && e.equipped === 1);
+  const equippedAccessory = allEquipment.find(e => e.slot === 'accessory' && e.equipped === 1);
+
+  // 计算装备加成
+  const equipBonus = {
+    attack: equippedWeapon?.finalStat || 0,
+    defense: equippedArmor?.finalStat || 0,
+    hp: equippedAccessory?.finalStat || 0,
+  };
 
   let cultivateCooldown = 0;
   if (agent.lastCultivate) {
@@ -246,7 +260,14 @@ app.get('/status', async (c) => {
 
   const realm = getCurrentRealm(agent.cultivation);
   const nextRealm = getNextRealm(agent.cultivation);
-  const stats = calculateStats(agent.cultivation);
+  const baseStats = calculateStats(agent.cultivation);
+
+  // 加上装备加成
+  const finalStats = {
+    hp: baseStats.hp + equipBonus.hp,
+    attack: baseStats.attack + equipBonus.attack,
+    defense: baseStats.defense + equipBonus.defense,
+  };
 
   const availableActions: string[] = ['explore', 'fight'];
   if (cultivateCooldown === 0) availableActions.unshift('cultivate');
@@ -257,9 +278,15 @@ app.get('/status', async (c) => {
     data: {
       name: agent.name, realm: realm.name, cultivation: agent.cultivation,
       next_realm: nextRealm?.minCultivation ?? null,
-      hp: agent.hp, max_hp: stats.hp, attack: stats.attack, defense: stats.defense,
+      hp: agent.hp, max_hp: finalStats.hp, attack: finalStats.attack, defense: finalStats.defense,
       location: agent.location, dao_resonance: agent.daoResonance,
+      equipment: {
+        weapon: equippedWeapon ? { name: equippedWeapon.itemName, quality: equippedWeapon.quality, attack: equippedWeapon.finalStat } : null,
+        armor: equippedArmor ? { name: equippedArmor.itemName, quality: equippedArmor.quality, defense: equippedArmor.finalStat } : null,
+        accessory: equippedAccessory ? { name: equippedAccessory.itemName, quality: equippedAccessory.quality, hp: equippedAccessory.finalStat } : null,
+      },
       inventory: items.map(i => ({ name: i.itemName, quantity: i.quantity })),
+      equipment_bag: allEquipment.filter(e => e.equipped === 0).length,
       cooldowns: { cultivate: cultivateCooldown },
       resonate_remaining: resonateRemaining,
       available_actions: availableActions,
@@ -315,10 +342,12 @@ app.post('/explore', async (c) => {
   const db = c.get('db');
   const agent = c.get('agent');
   const stats = calculateStats(agent.cultivation);
+  const realm = getCurrentRealm(agent.cultivation);
 
   const rand = Math.random();
 
-  if (rand < 0.4) {
+  if (rand < 0.35) {
+    // 35% 遇到怪物
     const monster = generateMonster(agent.cultivation);
     const hint = getMonsterHint(stats.attack, monster.power);
     const monsterId = crypto.randomUUID();
@@ -332,7 +361,8 @@ app.post('/explore', async (c) => {
       data: { monster_id: monsterId, name: monster.name, power: monster.power, rewards: { cultivation: monster.rewardCultivation, items: monster.rewardItem ? [monster.rewardItem] : [] } },
       message: `你在${agent.location}探索时，遭遇了一只${monster.name}！`, hint,
     });
-  } else if (rand < 0.65) {
+  } else if (rand < 0.50) {
+    // 15% 发现丹药
     const itemName = getRandomItem();
     if (itemName) {
       const existing = await db.query.inventory.findFirst({
@@ -349,7 +379,26 @@ app.post('/explore', async (c) => {
         message: `你在${agent.location}发现了${itemName}！`, hint: '使用 POST /use 来使用物品',
       });
     }
-  } else if (rand < 0.8) {
+  } else if (rand < 0.60) {
+    // 10% 发现装备
+    const newEquip = generateEquipment(realm.name);
+    if (newEquip) {
+      const equipId = crypto.randomUUID();
+      await db.insert(equipment).values({
+        id: equipId, agentId: agent.id, slot: newEquip.slot, itemName: newEquip.name,
+        quality: newEquip.quality, baseStat: newEquip.baseStat, finalStat: newEquip.finalStat, equipped: 0,
+      });
+      const slotName = getSlotName(newEquip.slot);
+      const statName = getSlotStatName(newEquip.slot);
+      return c.json({
+        success: true, event: 'equipment',
+        data: { equipment_id: equipId, name: newEquip.name, slot: slotName, quality: newEquip.quality, stat: newEquip.finalStat, stat_type: statName },
+        message: `你发现了 ${getQualityEmoji(newEquip.quality)}${newEquip.quality}${newEquip.name}！（${statName}+${newEquip.finalStat}）`,
+        hint: '使用 POST /equip {"id":"装备ID"} 来装备',
+      });
+    }
+  } else if (rand < 0.75) {
+    // 15% 遇到NPC
     const npcs = ['云游道人', '神秘老者', '落难修士', '采药童子'];
     const wisdoms = ['修行之道，在于持之以恒', '心魔不除，难成大道', '机缘来时，切莫错过', '与人为善，因果自有定数'];
     const npc = npcs[Math.floor(Math.random() * npcs.length)];
@@ -361,6 +410,7 @@ app.post('/explore', async (c) => {
     });
   }
 
+  // 25% 什么都没有
   return c.json({
     success: true, event: 'nothing', data: {},
     message: `你在${agent.location}四处探索，但一无所获...`, hint: '继续探索或尝试修炼',
@@ -465,6 +515,121 @@ app.post('/use', async (c) => {
     data: { item_used: itemName, effect: result.message, current_cultivation: result.cultivation, current_hp: result.hp, realm: newRealm.name, broke_through: brokeThrough, remaining: inventoryItem.quantity - 1 },
     message: `你服下${itemName}，${result.message}` + (brokeThrough ? `\n恭喜！你突破至${newRealm.name}！` : ''),
     hint: brokeThrough ? '境界突破！可以写下悟道心得' : '继续修炼或探索',
+  });
+});
+
+// 查看装备
+app.get('/equipment', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+
+  const allEquipment = await db.query.equipment.findMany({
+    where: eq(equipment.agentId, agent.id),
+  });
+
+  const equipped = {
+    weapon: allEquipment.find(e => e.slot === 'weapon' && e.equipped === 1),
+    armor: allEquipment.find(e => e.slot === 'armor' && e.equipped === 1),
+    accessory: allEquipment.find(e => e.slot === 'accessory' && e.equipped === 1),
+  };
+
+  const unequipped = allEquipment.filter(e => e.equipped === 0);
+
+  return c.json({
+    success: true,
+    data: {
+      equipped: {
+        weapon: equipped.weapon ? { name: equipped.weapon.itemName, quality: equipped.weapon.quality, stat: equipped.weapon.finalStat } : null,
+        armor: equipped.armor ? { name: equipped.armor.itemName, quality: equipped.armor.quality, stat: equipped.armor.finalStat } : null,
+        accessory: equipped.accessory ? { name: equipped.accessory.itemName, quality: equipped.accessory.quality, stat: equipped.accessory.finalStat } : null,
+      },
+      inventory: unequipped.map(e => ({
+        id: e.id,
+        name: e.itemName,
+        slot: e.slot,
+        quality: e.quality,
+        stat: e.finalStat,
+      })),
+      total_bonus: {
+        attack: equipped.weapon?.finalStat || 0,
+        defense: equipped.armor?.finalStat || 0,
+        hp: equipped.accessory?.finalStat || 0,
+      },
+    },
+    message: '你的装备一览',
+  });
+});
+
+// 装备物品
+app.post('/equip', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { id } = body;
+
+  if (!id) {
+    return c.json({ success: false, error: 'no_id', message: '请指定装备ID' }, 400);
+  }
+
+  const item = await db.query.equipment.findFirst({
+    where: and(eq(equipment.id, id), eq(equipment.agentId, agent.id)),
+  });
+
+  if (!item) {
+    return c.json({ success: false, error: 'not_found', message: '未找到该装备' }, 400);
+  }
+
+  if (item.equipped === 1) {
+    return c.json({ success: false, error: 'already_equipped', message: '该装备已装备' }, 400);
+  }
+
+  if (!canEquip(item.itemName, agent.realm)) {
+    return c.json({ success: false, error: 'realm_too_low', message: '境界不足，无法装备' }, 400);
+  }
+
+  // 先卸下同槽位的装备
+  await db.update(equipment)
+    .set({ equipped: 0 })
+    .where(and(eq(equipment.agentId, agent.id), eq(equipment.slot, item.slot), eq(equipment.equipped, 1)));
+
+  // 装备新物品
+  await db.update(equipment).set({ equipped: 1 }).where(eq(equipment.id, id));
+
+  const slotName = getSlotName(item.slot as EquipmentSlot);
+  const statName = getSlotStatName(item.slot as EquipmentSlot);
+
+  return c.json({
+    success: true,
+    data: { equipped: item.itemName, slot: slotName, quality: item.quality, stat_bonus: item.finalStat },
+    message: `已装备 ${getQualityEmoji(item.quality as any)}${item.quality}${item.itemName}，${statName}+${item.finalStat}`,
+  });
+});
+
+// 卸下装备
+app.post('/unequip', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { slot } = body;
+
+  if (!slot || !['weapon', 'armor', 'accessory'].includes(slot)) {
+    return c.json({ success: false, error: 'invalid_slot', message: '请指定有效槽位: weapon/armor/accessory' }, 400);
+  }
+
+  const item = await db.query.equipment.findFirst({
+    where: and(eq(equipment.agentId, agent.id), eq(equipment.slot, slot), eq(equipment.equipped, 1)),
+  });
+
+  if (!item) {
+    return c.json({ success: false, error: 'nothing_equipped', message: `${getSlotName(slot)}槽位没有装备` }, 400);
+  }
+
+  await db.update(equipment).set({ equipped: 0 }).where(eq(equipment.id, item.id));
+
+  return c.json({
+    success: true,
+    data: { unequipped: item.itemName, slot: getSlotName(slot) },
+    message: `已卸下${item.itemName}`,
   });
 });
 

@@ -69,8 +69,22 @@ export const monsters = mysqlTable('monsters', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// 装备表
+export const equipment = mysqlTable('equipment', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: varchar('agent_id', { length: 36 }).references(() => agents.id).notNull(),
+  slot: varchar('slot', { length: 16 }).notNull(), // weapon/armor/accessory
+  itemName: varchar('item_name', { length: 64 }).notNull(),
+  quality: varchar('quality', { length: 16 }).notNull(),
+  baseStat: int('base_stat').notNull(),
+  finalStat: int('final_stat').notNull(),
+  equipped: int('equipped').default(0).notNull(), // 0=未装备, 1=已装备
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Enlightenment = typeof enlightenments.$inferSelect;
 export type InventoryItem = typeof inventory.$inferSelect;
 export type Monster = typeof monsters.$inferSelect;
+export type EquipmentItem = typeof equipment.$inferSelect;
