@@ -1,18 +1,10 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/tidb-serverless';
+import { connect } from '@tidbcloud/serverless';
 import * as schema from './schema';
 
-let pool: mysql.Pool | null = null;
-
 export function createDb(connectionString: string) {
-  if (!pool) {
-    pool = mysql.createPool({
-      uri: connectionString,
-      waitForConnections: true,
-      connectionLimit: 10,
-    });
-  }
-  return drizzle(pool, { schema, mode: 'default' });
+  const client = connect({ url: connectionString });
+  return drizzle(client, { schema });
 }
 
 export type Database = ReturnType<typeof createDb>;
