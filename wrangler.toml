@@ -1,0 +1,17 @@
+name = "xiuxian-mud"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+# DATABASE_URL will be set as a secret
+
+# Uncomment to add secrets:
+# [secrets]
+# DATABASE_URL = ""
+
+# Environment configuration
+[env.production]
+name = "xiuxian-mud"
+
+[env.development]
+name = "xiuxian-mud-dev"
