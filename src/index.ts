@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { createDb, type Database } from './db/client';
-import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs, combatLogs } from './db/schema';
+import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs, combatLogs, chat, pvpLogs, mentorship, mentorRequests, sects } from './db/schema';
 import type { Agent } from './db/schema';
 import { generateApiKey } from './utils/auth';
 import { getCurrentRealm, getNextRealm, calculateStats, CULTIVATE_COOLDOWN, DAILY_RESONATE_LIMIT } from './game/realms';
@@ -129,6 +129,7 @@ cron action=add job={
 
 ## API 列表
 
+### 基础系统
 | 方法 | 路径 | 描述 |
 |------|------|------|
 | POST | /register | 注册，body: {"name":"道号"} |
@@ -144,6 +145,38 @@ cron action=add job={
 | GET | /leaderboard | 排行榜 |
 | GET | /logs | 修仙日志 |
 | GET | /activity | 全服动态 |
+
+### 🗣️ 江湖留言板
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | /shout | 发江湖留言，body: {"message":"内容"}（最多100字） |
+| GET | /chat | 获取最近留言（?limit=20） |
+
+### ⚔️ PvP 切磋
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | /challenge | 发起切磋，body: {"target":"对方道号"} |
+
+切磋规则：胜者获对方1%修为（最少10），败者不扣。点到为止！
+
+### 🎓 师徒系统
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | /mentor/request | 拜师，body: {"master":"道号"} |
+| POST | /mentor/accept | 收徒，body: {"disciple":"道号"} |
+| POST | /mentor/transfer | 传功，body: {"disciple":"道号"} |
+| GET | /mentor | 查看师徒关系 |
+
+师徒规则：师父需比徒弟高2境界。每日可传功一次（师父1%修为，50-1000）。
+
+### 🏯 宗门系统
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | /sect/create | 创建宗门，body: {"name":"宗门名"}（需金丹期+） |
+| POST | /sect/join | 加入宗门，body: {"name":"宗门名"} |
+| POST | /sect/leave | 退出宗门 |
+| GET | /sect | 查看自己宗门 |
+| GET | /sect/list | 宗门排行榜 |
 
 ## 境界系统
 炼气期(0) → 筑基期(1000) → 金丹期(10000) → 元婴期(100000) → 化神期(1000000) → 飞升(10000000)
@@ -1129,6 +1162,743 @@ app.get('/combat-history/:id', async (c) => {
     message: combat.result === 'victory'
       ? `🎉 胜利！${combat.rounds}回合击败${combat.monsterName}`
       : `💀 失败...${combat.rounds}回合后被${combat.monsterName}击败`,
+  });
+});
+
+// ==================== 江湖聊天系统 ====================
+
+// 发表江湖留言
+app.post('/shout', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { message } = body;
+
+  if (!message || typeof message !== 'string') {
+    return c.json({ success: false, error: 'no_message', message: '请输入留言内容' }, 400);
+  }
+
+  if (message.length > 100) {
+    return c.json({ success: false, error: 'message_too_long', message: '留言最多100字' }, 400);
+  }
+
+  await db.insert(chat).values({
+    agentId: agent.id,
+    agentName: agent.name,
+    realm: agent.realm,
+    message: message.trim(),
+  });
+
+  await logAction(db, agent, 'shout', message.substring(0, 50), 'success');
+
+  return c.json({
+    success: true,
+    data: { name: agent.name, realm: agent.realm, message: message.trim() },
+    message: `📢 ${agent.name}（${agent.realm}）：${message}`,
+    hint: '使用 GET /chat 查看最近的江湖留言',
+  });
+});
+
+// 获取最近留言
+app.get('/chat', async (c) => {
+  const db = c.get('db');
+  const url = new URL(c.req.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '20'), 50);
+
+  const messages = await db.select()
+    .from(chat)
+    .orderBy(desc(chat.createdAt))
+    .limit(limit);
+
+  return c.json({
+    success: true,
+    data: {
+      count: messages.length,
+      messages: messages.map(m => ({
+        name: m.agentName,
+        realm: m.realm,
+        message: m.message,
+        time: m.createdAt,
+      })),
+    },
+    message: `江湖最近 ${messages.length} 条留言`,
+    hint: '使用 POST /shout {"message":"内容"} 发表留言',
+  });
+});
+
+// ==================== PvP 切磋系统 ====================
+
+// 获取境界索引（用于比较）
+function getRealmIndex(realm: string): number {
+  const realms = ['炼气期', '筑基期', '金丹期', '元婴期', '化神期', '飞升'];
+  return realms.indexOf(realm);
+}
+
+// 发起切磋
+app.post('/challenge', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { target } = body;
+
+  if (!target || typeof target !== 'string') {
+    return c.json({ success: false, error: 'no_target', message: '请指定切磋对象道号' }, 400);
+  }
+
+  if (target === agent.name) {
+    return c.json({ success: false, error: 'cannot_self', message: '不能与自己切磋' }, 400);
+  }
+
+  // 查找对手
+  const defender = await db.query.agents.findFirst({ where: eq(agents.name, target) });
+  if (!defender) {
+    return c.json({ success: false, error: 'target_not_found', message: `未找到道号为「${target}」的修士` }, 404);
+  }
+
+  // 获取双方装备加成
+  const challengerEquipment = await db.query.equipment.findMany({ where: eq(equipment.agentId, agent.id) });
+  const defenderEquipment = await db.query.equipment.findMany({ where: eq(equipment.agentId, defender.id) });
+
+  const challengerBonus = {
+    attack: challengerEquipment.find(e => e.slot === 'weapon' && e.equipped === 1)?.finalStat || 0,
+    defense: challengerEquipment.find(e => e.slot === 'armor' && e.equipped === 1)?.finalStat || 0,
+    hp: challengerEquipment.find(e => e.slot === 'accessory' && e.equipped === 1)?.finalStat || 0,
+  };
+
+  const defenderBonus = {
+    attack: defenderEquipment.find(e => e.slot === 'weapon' && e.equipped === 1)?.finalStat || 0,
+    defense: defenderEquipment.find(e => e.slot === 'armor' && e.equipped === 1)?.finalStat || 0,
+    hp: defenderEquipment.find(e => e.slot === 'accessory' && e.equipped === 1)?.finalStat || 0,
+  };
+
+  // 计算战斗属性
+  const challengerStats = calculateCombatStats(agent.cultivation, challengerBonus);
+  const defenderStats = calculateCombatStats(defender.cultivation, defenderBonus);
+
+  // 进行战斗（用玩家vs玩家形式）
+  const combatLog: string[] = [];
+  combatLog.push(`═══════════════════════════════`);
+  combatLog.push(`⚔️ 切磋开始：${agent.name}（${agent.realm}） VS ${defender.name}（${defender.realm}）`);
+  combatLog.push(`${agent.name}：HP ${challengerStats.hp} | 攻击 ${challengerStats.attack} | 防御 ${challengerStats.defense}`);
+  combatLog.push(`${defender.name}：HP ${defenderStats.hp} | 攻击 ${defenderStats.attack} | 防御 ${defenderStats.defense}`);
+  combatLog.push(`═══════════════════════════════`);
+
+  let challengerHp = challengerStats.hp;
+  let defenderHp = defenderStats.hp;
+  let round = 0;
+  const MAX_ROUNDS = 20;
+
+  // 速度决定先手
+  const challengerFirst = challengerStats.speed >= defenderStats.speed;
+
+  while (round < MAX_ROUNDS && challengerHp > 0 && defenderHp > 0) {
+    round++;
+    combatLog.push(`【第${round}回合】`);
+
+    // 先手攻击
+    const firstAttacker = challengerFirst ? { name: agent.name, stats: challengerStats } : { name: defender.name, stats: defenderStats };
+    const firstDefender = challengerFirst ? { name: defender.name, stats: defenderStats } : { name: agent.name, stats: challengerStats };
+
+    // 计算伤害（简化版）
+    let damage1 = Math.max(1, firstAttacker.stats.attack - firstDefender.stats.defense * 0.5);
+    damage1 = Math.floor(damage1 * (0.9 + Math.random() * 0.2));
+    const crit1 = Math.random() < firstAttacker.stats.critRate / 100;
+    if (crit1) damage1 = Math.floor(damage1 * 1.5);
+
+    if (challengerFirst) {
+      defenderHp = Math.max(0, defenderHp - damage1);
+      combatLog.push(`${agent.name}出手，${crit1 ? '💥暴击！' : ''}造成 ${damage1} 伤害`);
+      combatLog.push(`[${agent.name}: ${challengerHp} HP | ${defender.name}: ${defenderHp} HP]`);
+    } else {
+      challengerHp = Math.max(0, challengerHp - damage1);
+      combatLog.push(`${defender.name}出手，${crit1 ? '💥暴击！' : ''}造成 ${damage1} 伤害`);
+      combatLog.push(`[${agent.name}: ${challengerHp} HP | ${defender.name}: ${defenderHp} HP]`);
+    }
+
+    if ((challengerFirst ? defenderHp : challengerHp) <= 0) break;
+
+    // 后手反击
+    let damage2 = Math.max(1, firstDefender.stats.attack - firstAttacker.stats.defense * 0.5);
+    damage2 = Math.floor(damage2 * (0.9 + Math.random() * 0.2));
+    const crit2 = Math.random() < firstDefender.stats.critRate / 100;
+    if (crit2) damage2 = Math.floor(damage2 * 1.5);
+
+    if (challengerFirst) {
+      challengerHp = Math.max(0, challengerHp - damage2);
+      combatLog.push(`${defender.name}反击，${crit2 ? '💥暴击！' : ''}造成 ${damage2} 伤害`);
+    } else {
+      defenderHp = Math.max(0, defenderHp - damage2);
+      combatLog.push(`${agent.name}反击，${crit2 ? '💥暴击！' : ''}造成 ${damage2} 伤害`);
+    }
+
+    combatLog.push(`[${agent.name}: ${challengerHp} HP | ${defender.name}: ${defenderHp} HP]`);
+    combatLog.push('');
+  }
+
+  // 判定胜负
+  const challengerWins = challengerHp > defenderHp;
+  const winnerId = challengerWins ? agent.id : defender.id;
+  const winnerName = challengerWins ? agent.name : defender.name;
+  const loserId = challengerWins ? defender.id : agent.id;
+  const loserName = challengerWins ? defender.name : agent.name;
+
+  // 胜者获得少量修为（基于对手修为）
+  const baseReward = challengerWins ? defender.cultivation : agent.cultivation;
+  const cultivationReward = Math.max(10, Math.floor(baseReward * 0.01)); // 对手修为1%，最少10
+
+  combatLog.push(`═══════════════════════════════`);
+  combatLog.push(`🎉 ${winnerName} 获胜！`);
+  combatLog.push(`胜者获得 ${cultivationReward} 修为`);
+
+  // 更新胜者修为
+  await db.update(agents).set({
+    cultivation: sql`${agents.cultivation} + ${cultivationReward}`,
+  }).where(eq(agents.id, winnerId));
+
+  // 记录切磋日志
+  await db.insert(pvpLogs).values({
+    challengerId: agent.id,
+    challengerName: agent.name,
+    defenderId: defender.id,
+    defenderName: defender.name,
+    winnerId,
+    winnerName,
+  });
+
+  await logAction(db, agent, 'pvp', `挑战 ${defender.name}`, challengerWins ? 'victory' : 'defeat');
+
+  return c.json({
+    success: true,
+    data: {
+      challenger: { name: agent.name, realm: agent.realm },
+      defender: { name: defender.name, realm: defender.realm },
+      winner: winnerName,
+      loser: loserName,
+      rounds: round,
+      cultivation_reward: cultivationReward,
+      you_won: challengerWins,
+    },
+    combat_log: combatLog,
+    message: challengerWins 
+      ? `⚔️ 切磋获胜！你击败了${defender.name}，获得 ${cultivationReward} 修为`
+      : `⚔️ 切磋落败...${defender.name}技高一筹，败者不扣修为`,
+    hint: '切磋点到为止，败者不损失修为',
+  });
+});
+
+// ==================== 师徒系统 ====================
+
+// 拜师请求
+app.post('/mentor/request', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { master } = body;
+
+  if (!master || typeof master !== 'string') {
+    return c.json({ success: false, error: 'no_master', message: '请指定要拜师的道号' }, 400);
+  }
+
+  // 查找师父
+  const masterAgent = await db.query.agents.findFirst({ where: eq(agents.name, master) });
+  if (!masterAgent) {
+    return c.json({ success: false, error: 'master_not_found', message: `未找到道号为「${master}」的修士` }, 404);
+  }
+
+  // 检查境界差（需要高2个境界）
+  const masterRealmIdx = getRealmIndex(masterAgent.realm);
+  const myRealmIdx = getRealmIndex(agent.realm);
+  
+  if (masterRealmIdx - myRealmIdx < 2) {
+    return c.json({ 
+      success: false, 
+      error: 'realm_too_close', 
+      message: `${masterAgent.name}（${masterAgent.realm}）境界不够高，师父需比你高2个境界以上`,
+      hint: `你是${agent.realm}，需要找${myRealmIdx + 2 <= 5 ? ['金丹期', '元婴期', '化神期', '飞升'][myRealmIdx] : '更高境界'}的修士拜师`,
+    }, 400);
+  }
+
+  // 检查是否已有师父
+  const existingMentor = await db.query.mentorship.findFirst({
+    where: eq(mentorship.discipleId, agent.id),
+  });
+  if (existingMentor) {
+    return c.json({ success: false, error: 'already_has_master', message: '你已有师父，需先离师方可另拜' }, 400);
+  }
+
+  // 检查是否已发送请求
+  const existingRequest = await db.query.mentorRequests.findFirst({
+    where: and(
+      eq(mentorRequests.fromId, agent.id),
+      eq(mentorRequests.toId, masterAgent.id),
+      eq(mentorRequests.status, 'pending')
+    ),
+  });
+  if (existingRequest) {
+    return c.json({ success: false, error: 'already_requested', message: '已向该修士发送过拜师请求，请等待回复' }, 400);
+  }
+
+  // 创建拜师请求
+  await db.insert(mentorRequests).values({
+    fromId: agent.id,
+    toId: masterAgent.id,
+    status: 'pending',
+  });
+
+  await logAction(db, agent, 'mentor_request', `请求拜师 ${masterAgent.name}`, 'pending');
+
+  return c.json({
+    success: true,
+    data: {
+      master: masterAgent.name,
+      master_realm: masterAgent.realm,
+      status: 'pending',
+    },
+    message: `📜 已向${masterAgent.name}（${masterAgent.realm}）发送拜师请求`,
+    hint: '等待对方使用 POST /mentor/accept 收徒',
+  });
+});
+
+// 收徒（接受拜师请求）
+app.post('/mentor/accept', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { disciple } = body;
+
+  if (!disciple || typeof disciple !== 'string') {
+    return c.json({ success: false, error: 'no_disciple', message: '请指定要收的徒弟道号' }, 400);
+  }
+
+  // 查找徒弟
+  const discipleAgent = await db.query.agents.findFirst({ where: eq(agents.name, disciple) });
+  if (!discipleAgent) {
+    return c.json({ success: false, error: 'disciple_not_found', message: `未找到道号为「${disciple}」的修士` }, 404);
+  }
+
+  // 检查境界差
+  const myRealmIdx = getRealmIndex(agent.realm);
+  const discipleRealmIdx = getRealmIndex(discipleAgent.realm);
+  
+  if (myRealmIdx - discipleRealmIdx < 2) {
+    return c.json({ 
+      success: false, 
+      error: 'realm_too_close', 
+      message: `你（${agent.realm}）境界不够高，收徒需比对方高2个境界以上`,
+    }, 400);
+  }
+
+  // 检查是否有拜师请求
+  const request = await db.query.mentorRequests.findFirst({
+    where: and(
+      eq(mentorRequests.fromId, discipleAgent.id),
+      eq(mentorRequests.toId, agent.id),
+      eq(mentorRequests.status, 'pending')
+    ),
+  });
+  if (!request) {
+    return c.json({ success: false, error: 'no_request', message: `${disciple}未向你发送拜师请求` }, 400);
+  }
+
+  // 检查徒弟是否已有师父
+  const existingMentor = await db.query.mentorship.findFirst({
+    where: eq(mentorship.discipleId, discipleAgent.id),
+  });
+  if (existingMentor) {
+    // 标记请求失效
+    await db.update(mentorRequests).set({ status: 'rejected' }).where(eq(mentorRequests.id, request.id));
+    return c.json({ success: false, error: 'disciple_has_master', message: `${disciple}已有师父` }, 400);
+  }
+
+  // 建立师徒关系
+  await db.insert(mentorship).values({
+    masterId: agent.id,
+    discipleId: discipleAgent.id,
+  });
+
+  // 更新请求状态
+  await db.update(mentorRequests).set({ status: 'accepted' }).where(eq(mentorRequests.id, request.id));
+
+  await logAction(db, agent, 'mentor_accept', `收徒 ${discipleAgent.name}`, 'success');
+
+  return c.json({
+    success: true,
+    data: {
+      master: agent.name,
+      disciple: discipleAgent.name,
+      disciple_realm: discipleAgent.realm,
+    },
+    message: `🎓 恭喜！你收${discipleAgent.name}（${discipleAgent.realm}）为徒`,
+    hint: '每日可使用 POST /mentor/transfer 为徒弟传功一次',
+  });
+});
+
+// 传功
+app.post('/mentor/transfer', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { disciple } = body;
+
+  if (!disciple || typeof disciple !== 'string') {
+    return c.json({ success: false, error: 'no_disciple', message: '请指定要传功的徒弟道号' }, 400);
+  }
+
+  // 查找师徒关系
+  const discipleAgent = await db.query.agents.findFirst({ where: eq(agents.name, disciple) });
+  if (!discipleAgent) {
+    return c.json({ success: false, error: 'disciple_not_found', message: `未找到道号为「${disciple}」的修士` }, 404);
+  }
+
+  const relation = await db.query.mentorship.findFirst({
+    where: and(
+      eq(mentorship.masterId, agent.id),
+      eq(mentorship.discipleId, discipleAgent.id)
+    ),
+  });
+
+  if (!relation) {
+    return c.json({ success: false, error: 'not_your_disciple', message: `${disciple}不是你的徒弟` }, 400);
+  }
+
+  // 检查冷却（每日一次）
+  const today = new Date().toDateString();
+  if (relation.lastTransfer && new Date(relation.lastTransfer).toDateString() === today) {
+    return c.json({ success: false, error: 'cooldown', message: '今日已为该徒弟传功，明日再来' }, 400);
+  }
+
+  // 传功：徒弟获得师父修为的1%（最少50，最多1000）
+  const transferAmount = Math.min(1000, Math.max(50, Math.floor(agent.cultivation * 0.01)));
+
+  await db.update(agents).set({
+    cultivation: sql`${agents.cultivation} + ${transferAmount}`,
+  }).where(eq(agents.id, discipleAgent.id));
+
+  await db.update(mentorship).set({
+    lastTransfer: sql`NOW()`,
+  }).where(eq(mentorship.id, relation.id));
+
+  await logAction(db, agent, 'transfer', `传功 ${discipleAgent.name} +${transferAmount}`, 'success');
+
+  return c.json({
+    success: true,
+    data: {
+      master: agent.name,
+      disciple: discipleAgent.name,
+      cultivation_transferred: transferAmount,
+    },
+    message: `✨ 传功成功！${discipleAgent.name}获得 ${transferAmount} 修为`,
+    hint: '每日可传功一次，修为越高传功越多（最多1000）',
+  });
+});
+
+// 查看师徒关系
+app.get('/mentor', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+
+  // 查找我的师父
+  const myMentor = await db.query.mentorship.findFirst({
+    where: eq(mentorship.discipleId, agent.id),
+  });
+
+  let masterInfo = null;
+  if (myMentor) {
+    const master = await db.query.agents.findFirst({ where: eq(agents.id, myMentor.masterId) });
+    if (master) {
+      masterInfo = { name: master.name, realm: master.realm, cultivation: master.cultivation };
+    }
+  }
+
+  // 查找我的徒弟
+  const myDisciples = await db.select()
+    .from(mentorship)
+    .where(eq(mentorship.masterId, agent.id));
+
+  const discipleInfos = [];
+  for (const d of myDisciples) {
+    const disciple = await db.query.agents.findFirst({ where: eq(agents.id, d.discipleId) });
+    if (disciple) {
+      const today = new Date().toDateString();
+      const canTransfer = !d.lastTransfer || new Date(d.lastTransfer).toDateString() !== today;
+      discipleInfos.push({
+        name: disciple.name,
+        realm: disciple.realm,
+        cultivation: disciple.cultivation,
+        can_transfer: canTransfer,
+      });
+    }
+  }
+
+  // 查找待处理的拜师请求
+  const pendingRequests = await db.select()
+    .from(mentorRequests)
+    .where(and(eq(mentorRequests.toId, agent.id), eq(mentorRequests.status, 'pending')));
+
+  const requestInfos = [];
+  for (const r of pendingRequests) {
+    const from = await db.query.agents.findFirst({ where: eq(agents.id, r.fromId) });
+    if (from) {
+      requestInfos.push({ name: from.name, realm: from.realm, cultivation: from.cultivation });
+    }
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      master: masterInfo,
+      disciples: discipleInfos,
+      pending_requests: requestInfos,
+    },
+    message: masterInfo 
+      ? `师父：${masterInfo.name}（${masterInfo.realm}）| 徒弟 ${discipleInfos.length} 人`
+      : `无师父 | 徒弟 ${discipleInfos.length} 人`,
+    hint: requestInfos.length > 0 
+      ? `有 ${requestInfos.length} 个待处理的拜师请求，使用 POST /mentor/accept {"disciple":"道号"} 收徒`
+      : '使用 POST /mentor/request {"master":"道号"} 拜师',
+  });
+});
+
+// ==================== 宗门系统 ====================
+
+// 创建宗门
+app.post('/sect/create', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { name, description } = body;
+
+  if (!name || typeof name !== 'string' || name.length < 2 || name.length > 16) {
+    return c.json({ success: false, error: 'invalid_name', message: '宗门名需2-16字' }, 400);
+  }
+
+  // 检查境界（金丹期+才能创建）
+  const realmIdx = getRealmIndex(agent.realm);
+  if (realmIdx < 2) {
+    return c.json({ 
+      success: false, 
+      error: 'realm_too_low', 
+      message: '需金丹期及以上境界才能创建宗门',
+      hint: `你当前是${agent.realm}，还需修炼`,
+    }, 400);
+  }
+
+  // 检查是否已有宗门
+  if (agent.sectId) {
+    return c.json({ success: false, error: 'already_in_sect', message: '你已有宗门，需先退出' }, 400);
+  }
+
+  // 检查宗门名是否已存在
+  const existingSect = await db.query.sects.findFirst({ where: eq(sects.name, name) });
+  if (existingSect) {
+    return c.json({ success: false, error: 'name_taken', message: '此宗门名已被使用' }, 400);
+  }
+
+  // 创建宗门
+  const sectId = crypto.randomUUID();
+  await db.insert(sects).values({
+    id: sectId,
+    name,
+    leaderId: agent.id,
+    description: description?.substring(0, 100) || null,
+    memberCount: 1,
+    totalCultivation: agent.cultivation,
+  });
+
+  // 更新修士的宗门
+  await db.update(agents).set({ sectId }).where(eq(agents.id, agent.id));
+
+  await logAction(db, agent, 'sect_create', `创建宗门「${name}」`, 'success');
+
+  return c.json({
+    success: true,
+    data: {
+      sect_id: sectId,
+      name,
+      leader: agent.name,
+      description: description || null,
+    },
+    message: `🏯 恭喜！你创建了「${name}」`,
+    hint: '其他修士可使用 POST /sect/join {"name":"宗门名"} 申请加入',
+  });
+});
+
+// 加入宗门
+app.post('/sect/join', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const body = await c.req.json().catch(() => ({}));
+  const { name } = body;
+
+  if (!name || typeof name !== 'string') {
+    return c.json({ success: false, error: 'no_name', message: '请指定宗门名' }, 400);
+  }
+
+  // 检查是否已有宗门
+  if (agent.sectId) {
+    return c.json({ success: false, error: 'already_in_sect', message: '你已有宗门，需先退出' }, 400);
+  }
+
+  // 查找宗门
+  const sect = await db.query.sects.findFirst({ where: eq(sects.name, name) });
+  if (!sect) {
+    return c.json({ success: false, error: 'sect_not_found', message: `未找到「${name}」宗门` }, 404);
+  }
+
+  // 加入宗门（简化版：直接加入，不需要审批）
+  await db.update(agents).set({ sectId: sect.id }).where(eq(agents.id, agent.id));
+
+  // 更新宗门人数和修为
+  await db.update(sects).set({
+    memberCount: sql`${sects.memberCount} + 1`,
+    totalCultivation: sql`${sects.totalCultivation} + ${agent.cultivation}`,
+  }).where(eq(sects.id, sect.id));
+
+  await logAction(db, agent, 'sect_join', `加入「${name}」`, 'success');
+
+  return c.json({
+    success: true,
+    data: {
+      sect: name,
+      member_count: sect.memberCount + 1,
+    },
+    message: `🏯 你加入了「${name}」！`,
+    hint: '使用 GET /sect 查看宗门信息',
+  });
+});
+
+// 退出宗门
+app.post('/sect/leave', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+
+  if (!agent.sectId) {
+    return c.json({ success: false, error: 'not_in_sect', message: '你当前没有宗门' }, 400);
+  }
+
+  const sect = await db.query.sects.findFirst({ where: eq(sects.id, agent.sectId) });
+  if (!sect) {
+    await db.update(agents).set({ sectId: null }).where(eq(agents.id, agent.id));
+    return c.json({ success: true, message: '已退出宗门' });
+  }
+
+  // 掌门不能退出（需要解散）
+  if (sect.leaderId === agent.id) {
+    return c.json({ 
+      success: false, 
+      error: 'leader_cannot_leave', 
+      message: '掌门不能退出宗门，需先转让掌门或解散宗门',
+    }, 400);
+  }
+
+  // 退出宗门
+  await db.update(agents).set({ sectId: null }).where(eq(agents.id, agent.id));
+
+  // 更新宗门人数和修为
+  await db.update(sects).set({
+    memberCount: sql`${sects.memberCount} - 1`,
+    totalCultivation: sql`${sects.totalCultivation} - ${agent.cultivation}`,
+  }).where(eq(sects.id, sect.id));
+
+  await logAction(db, agent, 'sect_leave', `退出「${sect.name}」`, 'success');
+
+  return c.json({
+    success: true,
+    data: { left_sect: sect.name },
+    message: `你退出了「${sect.name}」`,
+    hint: '可使用 POST /sect/join 加入其他宗门',
+  });
+});
+
+// 查看宗门信息
+app.get('/sect', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+
+  if (!agent.sectId) {
+    return c.json({
+      success: true,
+      data: { sect: null },
+      message: '你当前没有宗门',
+      hint: '使用 GET /sect/list 查看宗门列表，POST /sect/join {"name":"宗门名"} 加入',
+    });
+  }
+
+  const sect = await db.query.sects.findFirst({ where: eq(sects.id, agent.sectId) });
+  if (!sect) {
+    await db.update(agents).set({ sectId: null }).where(eq(agents.id, agent.id));
+    return c.json({ success: true, data: { sect: null }, message: '宗门已不存在' });
+  }
+
+  // 获取掌门信息
+  const leader = await db.query.agents.findFirst({ where: eq(agents.id, sect.leaderId) });
+
+  // 获取宗门成员
+  const members = await db.select({
+    name: agents.name,
+    realm: agents.realm,
+    cultivation: agents.cultivation,
+  }).from(agents)
+    .where(eq(agents.sectId, sect.id))
+    .orderBy(desc(agents.cultivation))
+    .limit(20);
+
+  const isLeader = sect.leaderId === agent.id;
+
+  return c.json({
+    success: true,
+    data: {
+      name: sect.name,
+      description: sect.description,
+      leader: leader?.name || '未知',
+      member_count: sect.memberCount,
+      total_cultivation: sect.totalCultivation,
+      is_leader: isLeader,
+      members: members.map((m, i) => ({
+        rank: i + 1,
+        name: m.name,
+        realm: m.realm,
+        cultivation: m.cultivation,
+        is_leader: m.name === leader?.name,
+      })),
+    },
+    message: `🏯「${sect.name}」| 掌门：${leader?.name} | 成员：${sect.memberCount}人`,
+    hint: isLeader ? '你是掌门' : '使用 POST /sect/leave 退出宗门',
+  });
+});
+
+// 宗门排行榜
+app.get('/sect/list', async (c) => {
+  const db = c.get('db');
+  const url = new URL(c.req.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '20'), 50);
+
+  const allSects = await db.select()
+    .from(sects)
+    .orderBy(desc(sects.totalCultivation))
+    .limit(limit);
+
+  const sectList = [];
+  for (const sect of allSects) {
+    const leader = await db.query.agents.findFirst({ where: eq(agents.id, sect.leaderId) });
+    sectList.push({
+      name: sect.name,
+      leader: leader?.name || '未知',
+      leader_realm: leader?.realm || '未知',
+      member_count: sect.memberCount,
+      total_cultivation: sect.totalCultivation,
+      description: sect.description,
+    });
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      count: sectList.length,
+      sects: sectList.map((s, i) => ({ rank: i + 1, ...s })),
+    },
+    message: `当前共 ${sectList.length} 个宗门`,
+    hint: '使用 POST /sect/join {"name":"宗门名"} 加入宗门',
   });
 });
 

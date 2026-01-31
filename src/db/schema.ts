@@ -15,6 +15,9 @@ export const agents = mysqlTable('agents', {
   // 悟道系统
   daoResonance: int('dao_resonance').default(0).notNull(),
 
+  // 社交系统
+  sectId: varchar('sect_id', { length: 36 }), // 所属宗门
+
   // 冷却
   lastCultivate: timestamp('last_cultivate'),
   lastResonate: date('last_resonate'),
@@ -109,10 +112,20 @@ export const mentorship = mysqlTable('mentorship', {
   id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
   masterId: varchar('master_id', { length: 36 }).references(() => agents.id).notNull(),
   discipleId: varchar('disciple_id', { length: 36 }).references(() => agents.id).notNull(),
+  lastTransfer: timestamp('last_transfer'), // 上次传功时间
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   unique('mentorship_unique').on(table.masterId, table.discipleId),
 ]);
+
+// 拜师请求表
+export const mentorRequests = mysqlTable('mentor_requests', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  fromId: varchar('from_id', { length: 36 }).references(() => agents.id).notNull(),
+  toId: varchar('to_id', { length: 36 }).references(() => agents.id).notNull(),
+  status: varchar('status', { length: 16 }).default('pending').notNull(), // pending/accepted/rejected
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
 
 // 宗门表
 export const sects = mysqlTable('sects', {
@@ -180,3 +193,8 @@ export type EquipmentItem = typeof equipment.$inferSelect;
 export type BestiaryEntry = typeof bestiary.$inferSelect;
 export type GameLog = typeof gameLogs.$inferSelect;
 export type CombatLog = typeof combatLogs.$inferSelect;
+export type ChatMessage = typeof chat.$inferSelect;
+export type PvpLog = typeof pvpLogs.$inferSelect;
+export type Mentorship = typeof mentorship.$inferSelect;
+export type MentorRequest = typeof mentorRequests.$inferSelect;
+export type Sect = typeof sects.$inferSelect;
