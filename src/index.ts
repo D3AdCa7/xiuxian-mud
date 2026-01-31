@@ -2,11 +2,11 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { createDb, type Database } from './db/client';
-import { agents, inventory, monsters, enlightenments, resonanceLog, equipment } from './db/schema';
+import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs } from './db/schema';
 import type { Agent } from './db/schema';
 import { generateApiKey } from './utils/auth';
 import { getCurrentRealm, getNextRealm, calculateStats, CULTIVATE_COOLDOWN, DAILY_RESONATE_LIMIT } from './game/realms';
-import { generateMonster, getMonsterHint } from './game/monsters';
+import { generateMonster, getMonsterHint, getRarityEmoji, getRarityName, MONSTER_LIST } from './game/monsters';
 import { resolveCombat } from './game/combat';
 import { ITEMS, applyItemEffect, getRandomItem } from './game/items';
 import { generateEquipment, canEquip, getSlotName, getSlotStatName, getQualityEmoji, EQUIPMENT_LIST, type EquipmentSlot } from './game/equipment';
@@ -329,6 +329,13 @@ app.post('/cultivate', async (c) => {
     await db.update(agents).set({ realm: newRealm.name }).where(eq(agents.id, agent.id));
   }
 
+  // 记录日志
+  await db.insert(gameLogs).values({
+    agentId: agent.id, agentName: agent.name, action: 'cultivate',
+    detail: brokeThrough ? `突破至${newRealm.name}！修为${newCultivation}` : `修炼获得${gained}修为，当前${newCultivation}`,
+    result: brokeThrough ? 'breakthrough' : 'success',
+  });
+
   return c.json({
     success: true,
     data: { gained, total: newCultivation, realm: newRealm.name, broke_through: brokeThrough, next_realm: nextRealm?.minCultivation ?? null, next_available: CULTIVATE_COOLDOWN },
@@ -356,10 +363,33 @@ app.post('/explore', async (c) => {
       rewardCultivation: monster.rewardCultivation, rewardItem: monster.rewardItem,
     });
 
+    // 记录到图鉴（首次发现）
+    const existingEntry = await db.query.bestiary.findFirst({
+      where: and(eq(bestiary.agentId, agent.id), eq(bestiary.monsterName, monster.name)),
+    });
+    if (!existingEntry) {
+      await db.insert(bestiary).values({ agentId: agent.id, monsterName: monster.name, kills: 0 });
+    }
+
+    // 记录日志
+    await db.insert(gameLogs).values({
+      agentId: agent.id, agentName: agent.name, action: 'explore',
+      detail: `遇到${getRarityName(monster.rarity)}怪物：${monster.name}(战力${monster.power})`, result: 'monster',
+    });
+
     return c.json({
       success: true, event: 'monster',
-      data: { monster_id: monsterId, name: monster.name, power: monster.power, rewards: { cultivation: monster.rewardCultivation, items: monster.rewardItem ? [monster.rewardItem] : [] } },
-      message: `你在${agent.location}探索时，遭遇了一只${monster.name}！`, hint,
+      data: {
+        monster_id: monsterId,
+        name: monster.name,
+        description: monster.description,
+        power: monster.power,
+        rarity: monster.rarity,
+        rarity_name: getRarityName(monster.rarity),
+        rewards: { cultivation: monster.rewardCultivation, items: monster.rewardItem ? [monster.rewardItem] : [] },
+      },
+      message: `${getRarityEmoji(monster.rarity)} 你遭遇了${getRarityName(monster.rarity)}异兽【${monster.name}】！\n「${monster.description}」`,
+      hint,
     });
   } else if (rand < 0.50) {
     // 15% 发现丹药
@@ -456,8 +486,28 @@ app.post('/fight', async (c) => {
         await db.insert(inventory).values({ agentId: agent.id, itemName: item.name, quantity: item.quantity });
       }
     }
+
+    // 更新图鉴击杀数
+    const bestiaryEntry = await db.query.bestiary.findFirst({
+      where: and(eq(bestiary.agentId, agent.id), eq(bestiary.monsterName, monster.name)),
+    });
+    if (bestiaryEntry) {
+      await db.update(bestiary).set({ kills: bestiaryEntry.kills + 1 }).where(eq(bestiary.id, bestiaryEntry.id));
+    }
+
+    // 记录日志
+    await db.insert(gameLogs).values({
+      agentId: agent.id, agentName: agent.name, action: 'fight',
+      detail: `击杀${monster.name}，获得修为${combatResult.rewards!.cultivation}`, result: 'victory',
+    });
   } else {
     newCultivation = Math.max(0, newCultivation - combatResult.cultivationLost);
+
+    // 记录日志
+    await db.insert(gameLogs).values({
+      agentId: agent.id, agentName: agent.name, action: 'fight',
+      detail: `败于${monster.name}，损失修为${combatResult.cultivationLost}`, result: 'defeat',
+    });
   }
 
   const newRealm = getCurrentRealm(newCultivation);
@@ -759,6 +809,136 @@ app.post('/enlightenment/resonate', async (c) => {
     data: { gained_cultivation: cultivationGain, remaining_today: DAILY_RESONATE_LIMIT - resonateCount - 1 },
     message: '你细细品味此道，若有所悟...',
     hint: `今日还可参悟 ${DAILY_RESONATE_LIMIT - resonateCount - 1} 次`,
+  });
+});
+
+// ==================== 怪物图鉴 ====================
+
+// 查看图鉴
+app.get('/bestiary', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+
+  const entries = await db.query.bestiary.findMany({
+    where: eq(bestiary.agentId, agent.id),
+  });
+
+  const discovered = entries.map(e => {
+    const config = MONSTER_LIST.find(m => m.name === e.monsterName);
+    const level = e.kills >= 100 ? '宗师' : e.kills >= 50 ? '大师' : e.kills >= 20 ? '精通' : e.kills >= 5 ? '熟悉' : '初见';
+    const bonus = e.kills >= 100 ? 5 : e.kills >= 50 ? 2 : 0;
+    
+    return {
+      name: e.monsterName,
+      kills: e.kills,
+      level,
+      description: e.kills >= 5 ? (config?.description || '???') : '???',
+      rarity: e.kills >= 5 ? (config?.rarity || 'common') : '???',
+      drops: e.kills >= 20 ? (config?.drops || []) : ['???'],
+      damage_bonus: bonus > 0 ? `+${bonus}%` : null,
+    };
+  });
+
+  const totalSpecies = MONSTER_LIST.length;
+  const completion = Math.floor((entries.length / totalSpecies) * 100);
+
+  return c.json({
+    success: true,
+    data: {
+      total_species: totalSpecies,
+      discovered: entries.length,
+      completion: `${completion}%`,
+      monsters: discovered,
+    },
+    message: `你已发现 ${entries.length}/${totalSpecies} 种异兽`,
+    hint: '击杀更多怪物解锁图鉴详情和伤害加成',
+  });
+});
+
+// ==================== 修仙日志 ====================
+
+// 辅助函数：记录日志
+async function logAction(db: Database, agent: Agent, action: string, detail: string, result: string) {
+  try {
+    await db.insert(gameLogs).values({
+      agentId: agent.id,
+      agentName: agent.name,
+      action,
+      detail: detail.substring(0, 255),
+      result,
+    });
+  } catch {
+    // 日志记录失败不影响主流程
+  }
+}
+
+// 查看日志（公开）
+app.get('/logs', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const url = new URL(c.req.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+  const action = url.searchParams.get('action');
+  const target = url.searchParams.get('target'); // 特定修士
+
+  let conditions = [];
+  
+  // 如果指定了 target，查看那个修士的日志
+  if (target) {
+    const targetAgent = await db.query.agents.findFirst({
+      where: eq(agents.name, target),
+    });
+    if (targetAgent) {
+      conditions.push(eq(gameLogs.agentId, targetAgent.id));
+    }
+  }
+  
+  // 如果指定了 action 类型
+  if (action) {
+    conditions.push(eq(gameLogs.action, action));
+  }
+
+  const logs = await db.select()
+    .from(gameLogs)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(gameLogs.createdAt))
+    .limit(limit);
+
+  return c.json({
+    success: true,
+    data: {
+      count: logs.length,
+      logs: logs.map(l => ({
+        time: l.createdAt,
+        agent: l.agentName,
+        action: l.action,
+        detail: l.detail,
+        result: l.result,
+      })),
+    },
+    message: `最近 ${logs.length} 条日志`,
+    hint: '可用参数: ?limit=100&action=fight&target=修士名',
+  });
+});
+
+// 全服动态（最近活动摘要）
+app.get('/activity', async (c) => {
+  const db = c.get('db');
+
+  const logs = await db.select()
+    .from(gameLogs)
+    .orderBy(desc(gameLogs.createdAt))
+    .limit(20);
+
+  const summary = logs.map(l => {
+    const time = new Date(l.createdAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return `[${time}] ${l.agentName} ${l.action}: ${l.detail || ''}`;
+  });
+
+  return c.json({
+    success: true,
+    data: { activities: summary },
+    message: '灵网界最近动态',
   });
 });
 

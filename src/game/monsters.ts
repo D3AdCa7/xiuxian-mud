@@ -1,66 +1,148 @@
-// 怪物生成系统
+// 山海经怪物系统
 
-import { getRandomItem } from './items';
-
-const MONSTER_NAMES = [
-  '妖兽', '邪修', '魔物', '灵兽', '野兽',
-  '妖狼', '毒蛇', '巨蜘蛛', '食人花', '石魔',
-  '雷鹰', '火蟒', '冰狼', '风虎', '土熊',
-];
-
-const MONSTER_PREFIXES = [
-  '', '小', '普通', '精英', '变异', '远古', '上古',
-];
-
-export interface GeneratedMonster {
+export interface MonsterConfig {
   name: string;
+  description: string;
+  minPower: number;
+  maxPower: number;
+  realmRequired: string;
+  drops: string[];
+  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+}
+
+// 山海经怪物列表
+export const MONSTER_LIST: MonsterConfig[] = [
+  // === 炼气期怪物（新手村）===
+  // 普通
+  { name: '狌狌', description: '状如禺而白耳，伏行人走，食之善走', minPower: 10, maxPower: 25, realmRequired: '炼气期', drops: ['兽皮'], rarity: 'common' },
+  { name: '狸力', description: '状如豚，有距，其音如狗吠', minPower: 15, maxPower: 30, realmRequired: '炼气期', drops: ['兽骨'], rarity: 'common' },
+  { name: '䍺羊', description: '状如羊，无口，不可杀也', minPower: 20, maxPower: 35, realmRequired: '炼气期', drops: ['灵草'], rarity: 'common' },
+  { name: '耳鼠', description: '状如鼠，而兔首麋身，以其尾飞', minPower: 25, maxPower: 40, realmRequired: '炼气期', drops: ['妖兽内丹'], rarity: 'common' },
+  // 稀有
+  { name: '当康', description: '状如豚而有牙，其鸣自叫，见则天下大穰', minPower: 35, maxPower: 55, realmRequired: '炼气期', drops: ['聚灵丹', '灵石'], rarity: 'rare' },
+  { name: '鹿蜀', description: '状如马而白首，其文如虎而赤尾，其音如谣', minPower: 45, maxPower: 70, realmRequired: '炼气期', drops: ['培元丹'], rarity: 'rare' },
+  // 精英
+  { name: '穷奇', description: '状如牛，猬毛，音如獆狗，食人', minPower: 60, maxPower: 100, realmRequired: '炼气期', drops: ['筑基丹', '灵石'], rarity: 'epic' },
+
+  // === 筑基期怪物（外围森林）===
+  { name: '蛊雕', description: '状如雕而有角，其音如婴儿，食人', minPower: 100, maxPower: 200, realmRequired: '筑基期', drops: ['灵羽', '聚灵丹'], rarity: 'common' },
+  { name: '毕方', description: '状如鹤，一足，赤文青质而白喙', minPower: 120, maxPower: 220, realmRequired: '筑基期', drops: ['火羽', '培元丹'], rarity: 'common' },
+  { name: '青耕', description: '状如鹊，青身白喙，白目白尾', minPower: 150, maxPower: 280, realmRequired: '筑基期', drops: ['木灵珠'], rarity: 'rare' },
+  { name: '飞廉', description: '鹿身，头如雀，有角，蛇尾豹文', minPower: 200, maxPower: 400, realmRequired: '筑基期', drops: ['筑基丹', '风灵珠'], rarity: 'epic' },
+  // 传说
+  { name: '九尾狐', description: '状如狐而九尾，其音如婴儿，能食人', minPower: 350, maxPower: 500, realmRequired: '筑基期', drops: ['九尾狐皮', '培元丹', '筑基丹'], rarity: 'legendary' },
+
+  // === 金丹期怪物（灵脉山）===
+  { name: '烛龙', description: '人面蛇身而赤，直目正乘，其瞑乃晦，其视乃明', minPower: 500, maxPower: 1000, realmRequired: '金丹期', drops: ['龙鳞', '金丹'], rarity: 'rare' },
+  { name: '应龙', description: '有翼之龙，黄帝令应龙攻蚩尤', minPower: 800, maxPower: 1500, realmRequired: '金丹期', drops: ['应龙角', '龙血'], rarity: 'epic' },
+  { name: '夔牛', description: '状如牛，苍身而无角，一足，出入水则必风雨', minPower: 1200, maxPower: 2000, realmRequired: '金丹期', drops: ['夔牛皮', '雷灵珠'], rarity: 'legendary' },
+
+  // === 元婴期怪物（秘境入口）===
+  { name: '帝江', description: '状如黄囊，赤如丹火，六足四翼，浑敦无面目', minPower: 2000, maxPower: 5000, realmRequired: '元婴期', drops: ['混沌精华'], rarity: 'epic' },
+  { name: '饕餮', description: '羊身人面，眼在腋下，虎齿人手，食人', minPower: 3000, maxPower: 8000, realmRequired: '元婴期', drops: ['饕餮牙', '天材地宝'], rarity: 'legendary' },
+
+  // === 化神期怪物（深渊）===
+  { name: '刑天', description: '与帝争神，帝断其首，乃以乳为目，以脐为口，操干戚以舞', minPower: 8000, maxPower: 20000, realmRequired: '化神期', drops: ['神兵碎片'], rarity: 'epic' },
+  { name: '相柳', description: '九首蛇身，食于九土，其所歠所尼，即为源泽', minPower: 15000, maxPower: 50000, realmRequired: '化神期', drops: ['相柳毒血', '仙丹'], rarity: 'legendary' },
+];
+
+// 根据境界和修为获取可遇到的怪物
+export function getAvailableMonsters(realm: string, cultivation: number): MonsterConfig[] {
+  const realmOrder = ['炼气期', '筑基期', '金丹期', '元婴期', '化神期', '飞升'];
+  const realmIndex = realmOrder.indexOf(realm);
+  
+  return MONSTER_LIST.filter(m => {
+    const monsterRealmIndex = realmOrder.indexOf(m.realmRequired);
+    // 可以遇到当前境界和低一级境界的怪物
+    return monsterRealmIndex <= realmIndex && monsterRealmIndex >= realmIndex - 1;
+  });
+}
+
+// 生成怪物
+export function generateMonster(cultivation: number): {
+  name: string;
+  description: string;
   power: number;
   rewardCultivation: number;
   rewardItem: string | null;
-}
+  rarity: string;
+} {
+  const realmOrder = ['炼气期', '筑基期', '金丹期', '元婴期', '化神期', '飞升'];
+  let realm = '炼气期';
+  if (cultivation >= 1000000) realm = '化神期';
+  else if (cultivation >= 100000) realm = '元婴期';
+  else if (cultivation >= 10000) realm = '金丹期';
+  else if (cultivation >= 1000) realm = '筑基期';
 
-export function generateMonster(agentCultivation: number): GeneratedMonster {
-  // 生成实力在玩家 50%-150% 之间的怪物
-  const minPower = Math.max(10, agentCultivation * 0.5);
-  const maxPower = Math.max(20, agentCultivation * 1.5);
-  const power = Math.floor(minPower + Math.random() * (maxPower - minPower));
-
-  // 根据实力选择前缀
-  let prefixIndex = 0;
-  if (power > agentCultivation * 1.2) {
-    prefixIndex = Math.floor(Math.random() * 3) + 4; // 变异/远古/上古
-  } else if (power > agentCultivation * 0.8) {
-    prefixIndex = Math.floor(Math.random() * 2) + 2; // 普通/精英
-  } else {
-    prefixIndex = Math.floor(Math.random() * 2); // 空/小
+  const available = getAvailableMonsters(realm, cultivation);
+  if (available.length === 0) {
+    return { name: '野兽', description: '普通的野兽', power: 10, rewardCultivation: 5, rewardItem: null, rarity: 'common' };
   }
 
-  const prefix = MONSTER_PREFIXES[prefixIndex] ?? '';
-  const baseName = MONSTER_NAMES[Math.floor(Math.random() * MONSTER_NAMES.length)] ?? '妖兽';
-  const name = prefix + baseName;
+  // 稀有度权重
+  const weights: Record<string, number> = { common: 60, rare: 25, epic: 12, legendary: 3 };
+  const totalWeight = available.reduce((sum, m) => sum + weights[m.rarity], 0);
+  let rand = Math.random() * totalWeight;
 
-  // 奖励计算
+  let selected: MonsterConfig | null = null;
+  for (const monster of available) {
+    rand -= weights[monster.rarity];
+    if (rand <= 0) {
+      selected = monster;
+      break;
+    }
+  }
+  if (!selected) selected = available[0]!;
+
+  // 在范围内随机power
+  const power = Math.floor(selected.minPower + Math.random() * (selected.maxPower - selected.minPower));
+  
+  // 奖励：击杀怪物获得 power 的 10% 修为
   const rewardCultivation = Math.floor(power * 0.1);
-  const rewardItem = Math.random() < 0.3 ? getRandomItem() : null;
+  
+  // 随机掉落物品
+  const rewardItem = selected.drops.length > 0 && Math.random() < 0.5 
+    ? selected.drops[Math.floor(Math.random() * selected.drops.length)]! 
+    : null;
 
   return {
-    name,
+    name: selected.name,
+    description: selected.description,
     power,
     rewardCultivation,
     rewardItem,
+    rarity: selected.rarity,
   };
 }
 
-export function getMonsterHint(agentAttack: number, monsterPower: number): string {
-  const ratio = agentAttack / monsterPower;
+// 获取战斗建议
+export function getMonsterHint(playerAttack: number, monsterPower: number): string {
+  const ratio = playerAttack / monsterPower;
+  if (ratio >= 2) return '此敌弱小，可轻松击杀';
+  if (ratio >= 1.2) return '实力相当，可一战';
+  if (ratio >= 0.8) return '势均力敌，有风险';
+  if (ratio >= 0.5) return '此敌较强，建议谨慎';
+  return '此敌远超你的实力，建议回避';
+}
 
-  if (ratio >= 1.5) {
-    return '此敌实力远低于你，轻松可胜';
-  } else if (ratio >= 1.0) {
-    return '你的修为足以挑战此敌';
-  } else if (ratio >= 0.7) {
-    return '此敌略强于你，需谨慎应对';
-  } else {
-    return '此敌远超你的实力，建议回避';
-  }
+// 获取稀有度颜色
+export function getRarityEmoji(rarity: string): string {
+  const emojis: Record<string, string> = {
+    common: '⚪',
+    rare: '🟢',
+    epic: '🔵',
+    legendary: '🟡',
+  };
+  return emojis[rarity] || '⚪';
+}
+
+// 获取稀有度中文
+export function getRarityName(rarity: string): string {
+  const names: Record<string, string> = {
+    common: '普通',
+    rare: '稀有',
+    epic: '精英',
+    legendary: '传说',
+  };
+  return names[rarity] || '普通';
 }

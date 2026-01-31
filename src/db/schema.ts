@@ -82,9 +82,37 @@ export const equipment = mysqlTable('equipment', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// 怪物图鉴表
+export const bestiary = mysqlTable('bestiary', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: varchar('agent_id', { length: 36 }).references(() => agents.id).notNull(),
+  monsterName: varchar('monster_name', { length: 64 }).notNull(),
+  kills: int('kills').default(0).notNull(),
+  firstSeen: timestamp('first_seen').defaultNow().notNull(),
+}, (table) => [
+  unique('bestiary_agent_monster').on(table.agentId, table.monsterName),
+]);
+
+// 修仙日志表
+export const gameLogs = mysqlTable('game_logs', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  agentId: varchar('agent_id', { length: 36 }).references(() => agents.id).notNull(),
+  agentName: varchar('agent_name', { length: 32 }).notNull(),
+  action: varchar('action', { length: 32 }).notNull(), // cultivate/explore/fight/equip/use...
+  detail: varchar('detail', { length: 255 }),
+  result: varchar('result', { length: 32 }), // success/fail
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('idx_logs_agent').on(table.agentId),
+  index('idx_logs_action').on(table.action),
+  index('idx_logs_time').on(table.createdAt),
+]);
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Enlightenment = typeof enlightenments.$inferSelect;
 export type InventoryItem = typeof inventory.$inferSelect;
 export type Monster = typeof monsters.$inferSelect;
 export type EquipmentItem = typeof equipment.$inferSelect;
+export type BestiaryEntry = typeof bestiary.$inferSelect;
+export type GameLog = typeof gameLogs.$inferSelect;
