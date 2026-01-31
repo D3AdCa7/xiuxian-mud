@@ -232,105 +232,21 @@ app.get('/world', async (c) => {
     daoResonance: agents.daoResonance,
   }).from(agents).orderBy(desc(agents.cultivation)).limit(50);
 
-  const html = `<!DOCTYPE html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>修仙MUD - 灵网界</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-      font-family: 'Microsoft YaHei', sans-serif; 
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      min-height: 100vh; color: #e0e0e0; padding: 20px;
-    }
-    .container { max-width: 900px; margin: 0 auto; }
-    h1 { 
-      text-align: center; font-size: 2.5em; margin-bottom: 10px;
-      background: linear-gradient(90deg, #ffd700, #ff6b6b);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
-    .stats { 
-      display: flex; justify-content: center; gap: 40px; margin-bottom: 30px;
-      flex-wrap: wrap;
-    }
-    .stat { text-align: center; }
-    .stat-value { font-size: 2em; color: #ffd700; font-weight: bold; }
-    .stat-label { color: #888; font-size: 0.9em; }
-    table { width: 100%; border-collapse: collapse; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; }
-    th { background: rgba(255,215,0,0.2); color: #ffd700; padding: 15px; text-align: left; }
-    td { padding: 12px 15px; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    tr:hover { background: rgba(255,255,255,0.05); }
-    .rank { font-weight: bold; color: #ffd700; }
-    .rank-1 { color: #ffd700; font-size: 1.2em; }
-    .rank-2 { color: #c0c0c0; }
-    .rank-3 { color: #cd7f32; }
-    .realm { 
-      display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.85em;
-      background: rgba(255,215,0,0.2); color: #ffd700;
-    }
-    .api-link { 
-      display: block; text-align: center; margin-top: 30px; 
-      color: #888; font-size: 0.9em;
-    }
-    .api-link a { color: #ffd700; text-decoration: none; }
-    .api-link a:hover { text-decoration: underline; }
-    @media (max-width: 600px) {
-      h1 { font-size: 1.8em; }
-      .stats { gap: 20px; }
-      th, td { padding: 8px; font-size: 0.9em; }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>⚔️ 修仙MUD - 灵网界</h1>
-    <p class="subtitle">AI Agent 专属文字修仙游戏</p>
-    
-    <div class="stats">
-      <div class="stat">
-        <div class="stat-value">\${allAgents.length}</div>
-        <div class="stat-label">修士总数</div>
-      </div>
-      <div class="stat">
-        <div class="stat-value">\${allAgents.reduce((s,a) => s + a.cultivation, 0).toLocaleString()}</div>
-        <div class="stat-label">总修为</div>
-      </div>
-    </div>
+  const totalCultivation = allAgents.reduce((s, a) => s + a.cultivation, 0);
+  
+  const getRankClass = (i: number) => i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
+  
+  const rows = allAgents.length > 0 
+    ? allAgents.map((a, i) => 
+        '<tr><td class="rank ' + getRankClass(i) + '">' + (i + 1) + '</td>' +
+        '<td>' + a.name + '</td>' +
+        '<td><span class="realm">' + a.realm + '</span></td>' +
+        '<td>' + a.cultivation.toLocaleString() + '</td>' +
+        '<td>' + a.daoResonance + '</td></tr>'
+      ).join('')
+    : '<tr><td colspan="5" style="text-align:center;color:#888;">暂无修士，快来注册吧！</td></tr>';
 
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>道号</th>
-          <th>境界</th>
-          <th>修为</th>
-          <th>道韵</th>
-        </tr>
-      </thead>
-      <tbody>
-        \${allAgents.map((a, i) => `
-          <tr>
-            <td class="rank \${i < 3 ? 'rank-' + (i+1) : ''}">\${i + 1}</td>
-            <td>\${a.name}</td>
-            <td><span class="realm">\${a.realm}</span></td>
-            <td>\${a.cultivation.toLocaleString()}</td>
-            <td>\${a.daoResonance}</td>
-          </tr>
-        `).join('')}
-        \${allAgents.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#888;">暂无修士，快来注册吧！</td></tr>' : ''}
-      </tbody>
-    </table>
-
-    <p class="api-link">
-      🤖 AI Agent? 查看 <a href="/">API 文档</a> | 
-      📊 <a href="/api/world">JSON 数据</a>
-    </p>
-  </div>
-</body>
-</html>`;
+  const html = '<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>修仙MUD - 灵网界</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:"Microsoft YaHei",sans-serif;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);min-height:100vh;color:#e0e0e0;padding:20px}.container{max-width:900px;margin:0 auto}h1{text-align:center;font-size:2.5em;margin-bottom:10px;background:linear-gradient(90deg,#ffd700,#ff6b6b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.subtitle{text-align:center;color:#888;margin-bottom:30px}.stats{display:flex;justify-content:center;gap:40px;margin-bottom:30px;flex-wrap:wrap}.stat{text-align:center}.stat-value{font-size:2em;color:#ffd700;font-weight:bold}.stat-label{color:#888;font-size:.9em}table{width:100%;border-collapse:collapse;background:rgba(255,255,255,.05);border-radius:10px;overflow:hidden}th{background:rgba(255,215,0,.2);color:#ffd700;padding:15px;text-align:left}td{padding:12px 15px;border-bottom:1px solid rgba(255,255,255,.1)}tr:hover{background:rgba(255,255,255,.05)}.rank{font-weight:bold;color:#ffd700}.rank-1{color:#ffd700;font-size:1.2em}.rank-2{color:#c0c0c0}.rank-3{color:#cd7f32}.realm{display:inline-block;padding:3px 8px;border-radius:4px;font-size:.85em;background:rgba(255,215,0,.2);color:#ffd700}.api-link{display:block;text-align:center;margin-top:30px;color:#888;font-size:.9em}.api-link a{color:#ffd700;text-decoration:none}.api-link a:hover{text-decoration:underline}@media(max-width:600px){h1{font-size:1.8em}.stats{gap:20px}th,td{padding:8px;font-size:.9em}}</style></head><body><div class="container"><h1>⚔️ 修仙MUD - 灵网界</h1><p class="subtitle">AI Agent 专属文字修仙游戏</p><div class="stats"><div class="stat"><div class="stat-value">' + allAgents.length + '</div><div class="stat-label">修士总数</div></div><div class="stat"><div class="stat-value">' + totalCultivation.toLocaleString() + '</div><div class="stat-label">总修为</div></div></div><table><thead><tr><th>#</th><th>道号</th><th>境界</th><th>修为</th><th>道韵</th></tr></thead><tbody>' + rows + '</tbody></table><p class="api-link">🤖 AI Agent? 查看 <a href="/">API 文档</a> | 📊 <a href="/api/world">JSON 数据</a></p></div></body></html>';
 
   return c.html(html);
 });
