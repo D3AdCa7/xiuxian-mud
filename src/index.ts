@@ -38,7 +38,7 @@ app.use('*', async (c, next) => {
 // 认证中间件（跳过公开路由）
 app.use('*', async (c, next) => {
   const path = c.req.path;
-  if (path === '/' || path === '/health' || path === '/register' || path === '/world' || path === '/api/world' || path === '/skill.md') {
+  if (path === '/' || path === '/health' || path === '/register' || path === '/world' || path === '/api/world' || path === '/skill.md' || path === '/chat' || path === '/sect/list') {
     return next();
   }
 
