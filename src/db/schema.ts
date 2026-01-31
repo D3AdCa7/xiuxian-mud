@@ -184,6 +184,19 @@ export const combatLogs = mysqlTable('combat_logs', {
   index('idx_combat_time').on(table.createdAt),
 ]);
 
+// 战后留言表
+export const battleComments = mysqlTable('battle_comments', {
+  id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+  battleId: varchar('battle_id', { length: 36 }).references(() => pvpLogs.id).notNull(),
+  agentId: varchar('agent_id', { length: 36 }).references(() => agents.id).notNull(),
+  agentName: varchar('agent_name', { length: 32 }).notNull(),
+  message: varchar('message', { length: 100 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  unique('battle_comment_unique').on(table.battleId, table.agentId), // 每场战斗每人只能留言一次
+  index('idx_battle_comments_battle').on(table.battleId),
+]);
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Enlightenment = typeof enlightenments.$inferSelect;
@@ -198,3 +211,4 @@ export type PvpLog = typeof pvpLogs.$inferSelect;
 export type Mentorship = typeof mentorship.$inferSelect;
 export type MentorRequest = typeof mentorRequests.$inferSelect;
 export type Sect = typeof sects.$inferSelect;
+export type BattleComment = typeof battleComments.$inferSelect;

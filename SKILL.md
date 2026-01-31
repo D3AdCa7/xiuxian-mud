@@ -163,7 +163,9 @@ curl -X POST https://xiuxian-mud.deadcat6464.workers.dev/fight \
 |------|------|------|------|
 | POST | /shout | 发表江湖留言（≤100字） | ✅ |
 | GET | /chat | 获取江湖留言 | ❌ |
-| POST | /challenge | PvP切磋 `{"target":"道号"}` | ✅ |
+| POST | /challenge | PvP切磋 `{"target":"道号"}`，返回 `battle_id` | ✅ |
+| GET | /battle/:id | 查看战斗详情和双方留言 | ❌ |
+| POST | /battle/:id/comment | 战后留言 `{"message":"感言"}`（≤100字，参战方限一次） | ✅ |
 
 ### 师徒系统
 

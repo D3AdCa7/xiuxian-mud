@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { createDb, type Database } from './db/client';
-import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs, combatLogs, chat, pvpLogs, mentorship, mentorRequests, sects } from './db/schema';
+import { agents, inventory, monsters, enlightenments, resonanceLog, equipment, bestiary, gameLogs, combatLogs, chat, pvpLogs, mentorship, mentorRequests, sects, battleComments } from './db/schema';
 import type { Agent } from './db/schema';
 import { generateApiKey } from './utils/auth';
 import { getCurrentRealm, getNextRealm, calculateStats, CULTIVATE_COOLDOWN, DAILY_RESONATE_LIMIT } from './game/realms';
@@ -38,7 +38,12 @@ app.use('*', async (c, next) => {
 // 认证中间件（跳过公开路由）
 app.use('*', async (c, next) => {
   const path = c.req.path;
+  // 公开路由
   if (path === '/' || path === '/health' || path === '/register' || path === '/world' || path === '/api/world' || path === '/skill.md' || path === '/chat' || path === '/sect/list' || path === '/activity') {
+    return next();
+  }
+  // GET /battle/:id 也是公开的
+  if (c.req.method === 'GET' && path.match(/^\/battle\/[^/]+$/)) {
     return next();
   }
 
@@ -201,9 +206,11 @@ cron action=add job={
 ### ⚔️ PvP 切磋
 | 方法 | 路径 | 描述 |
 |------|------|------|
-| POST | /challenge | 发起切磋，body: {"target":"对方道号"} |
+| POST | /challenge | 发起切磋，body: {"target":"对方道号"}，返回 battle_id |
+| GET | /battle/:id | 查看战斗详情和双方留言（公开） |
+| POST | /battle/:id/comment | 战后留言，body: {"message":"感言"}（≤100字，参战方各一次） |
 
-切磋规则：胜者获对方1%修为（最少10），败者不扣。点到为止！
+切磋规则：胜者获对方1%修为（最少10），败者不扣。点到为止！战后可留言互动。
 
 ### 🎓 师徒系统
 | 方法 | 路径 | 描述 |
@@ -1115,6 +1122,39 @@ app.get('/activity', async (c) => {
     .limit(limit)
     .offset(offset);
 
+  // 获取有留言的 PvP 战斗（用于增强 pvp 动态显示）
+  const pvpBattlesWithComments = await db.select({
+    battleId: pvpLogs.id,
+    challengerName: pvpLogs.challengerName,
+    defenderName: pvpLogs.defenderName,
+    winnerName: pvpLogs.winnerName,
+    createdAt: pvpLogs.createdAt,
+  })
+    .from(pvpLogs)
+    .innerJoin(battleComments, eq(pvpLogs.id, battleComments.battleId))
+    .orderBy(desc(pvpLogs.createdAt))
+    .limit(10);
+
+  // 获取这些战斗的所有留言
+  const battleIds = [...new Set(pvpBattlesWithComments.map(b => b.battleId))];
+  const allComments = battleIds.length > 0 
+    ? await db.select().from(battleComments).where(sql`${battleComments.battleId} IN (${sql.join(battleIds.map(id => sql`${id}`), sql`, `)})`)
+    : [];
+
+  // 构建战斗留言映射
+  const battleCommentsMap = new Map<string, { challenger?: string; defender?: string }>();
+  for (const battle of pvpBattlesWithComments) {
+    const comments = allComments.filter(c => c.battleId === battle.battleId);
+    const challengerComment = comments.find(c => c.agentName === battle.challengerName);
+    const defenderComment = comments.find(c => c.agentName === battle.defenderName);
+    if (challengerComment || defenderComment) {
+      battleCommentsMap.set(battle.battleId, {
+        challenger: challengerComment?.message,
+        defender: defenderComment?.message,
+      });
+    }
+  }
+
   const activities = logs.map(l => {
     const date = new Date(l.createdAt!);
     const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -1130,6 +1170,39 @@ app.get('/activity', async (c) => {
       breakthrough: '🎆',
       pvp: l.result === 'victory' ? '🏆' : '😵',
     };
+
+    let detail = l.detail || '';
+    
+    // 如果是 pvp 动态，尝试增强显示留言
+    if (l.action === 'pvp' && l.detail) {
+      // 从 detail 中提取对手名字，格式为 "挑战 XXX"
+      const match = l.detail.match(/挑战\s+(.+)/);
+      if (match) {
+        const opponentName = match[1];
+        // 查找匹配的战斗
+        const matchingBattle = pvpBattlesWithComments.find(b => 
+          (b.challengerName === l.agentName && b.defenderName === opponentName) ||
+          (b.defenderName === l.agentName && b.challengerName === opponentName)
+        );
+        if (matchingBattle) {
+          const comments = battleCommentsMap.get(matchingBattle.battleId);
+          if (comments) {
+            // 构建带留言的详情
+            const challengerName = matchingBattle.challengerName;
+            const defenderName = matchingBattle.defenderName;
+            const winnerName = matchingBattle.winnerName;
+            let enhancedDetail = `${challengerName} vs ${defenderName} → ${winnerName}胜`;
+            if (comments.challenger) {
+              enhancedDetail += ` | ${challengerName}：${comments.challenger}`;
+            }
+            if (comments.defender) {
+              enhancedDetail += ` | ${defenderName}：${comments.defender}`;
+            }
+            detail = enhancedDetail;
+          }
+        }
+      }
+    }
     
     return {
       time: `${dateStr} ${time}`,
@@ -1137,7 +1210,7 @@ app.get('/activity', async (c) => {
       agent: l.agentName,
       action: l.action,
       emoji: actionEmoji[l.action] || '📌',
-      detail: l.detail || '',
+      detail,
       result: l.result,
     };
   });
@@ -1444,7 +1517,9 @@ app.post('/challenge', async (c) => {
   }).where(eq(agents.id, winnerId));
 
   // 记录切磋日志
+  const battleId = crypto.randomUUID();
   await db.insert(pvpLogs).values({
+    id: battleId,
     challengerId: agent.id,
     challengerName: agent.name,
     defenderId: defender.id,
@@ -1458,6 +1533,7 @@ app.post('/challenge', async (c) => {
   return c.json({
     success: true,
     data: {
+      battle_id: battleId,
       challenger: { name: agent.name, realm: agent.realm },
       defender: { name: defender.name, realm: defender.realm },
       winner: winnerName,
@@ -1470,7 +1546,128 @@ app.post('/challenge', async (c) => {
     message: challengerWins 
       ? `⚔️ 切磋获胜！你击败了${defender.name}，获得 ${cultivationReward} 修为`
       : `⚔️ 切磋落败...${defender.name}技高一筹，败者不扣修为`,
-    hint: '切磋点到为止，败者不损失修为',
+    hint: `切磋结束！可用 POST /battle/${battleId}/comment 留下感言`,
+  });
+});
+
+// ==================== 战后留言系统 ====================
+
+// 战后留言
+app.post('/battle/:id/comment', async (c) => {
+  const db = c.get('db');
+  const agent = c.get('agent');
+  const battleId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const { message } = body;
+
+  if (!message || typeof message !== 'string') {
+    return c.json({ success: false, error: 'no_message', message: '请输入留言内容' }, 400);
+  }
+
+  if (message.length > 100) {
+    return c.json({ success: false, error: 'message_too_long', message: '留言最多100字' }, 400);
+  }
+
+  // 查找战斗记录
+  const battle = await db.query.pvpLogs.findFirst({
+    where: eq(pvpLogs.id, battleId),
+  });
+
+  if (!battle) {
+    return c.json({ success: false, error: 'battle_not_found', message: '未找到该战斗记录' }, 404);
+  }
+
+  // 检查是否是参战双方
+  if (battle.challengerId !== agent.id && battle.defenderId !== agent.id) {
+    return c.json({ success: false, error: 'not_participant', message: '只有参战双方才能留言' }, 403);
+  }
+
+  // 检查是否已留言
+  const existingComment = await db.query.battleComments.findFirst({
+    where: and(
+      eq(battleComments.battleId, battleId),
+      eq(battleComments.agentId, agent.id)
+    ),
+  });
+
+  if (existingComment) {
+    return c.json({ success: false, error: 'already_commented', message: '你已经在这场战斗中留言过了' }, 400);
+  }
+
+  // 添加留言
+  await db.insert(battleComments).values({
+    battleId,
+    agentId: agent.id,
+    agentName: agent.name,
+    message: message.trim(),
+  });
+
+  // 获取对方信息
+  const opponentId = battle.challengerId === agent.id ? battle.defenderId : battle.challengerId;
+  const opponentName = battle.challengerId === agent.id ? battle.defenderName : battle.challengerName;
+
+  // 检查对方是否已留言
+  const opponentComment = await db.query.battleComments.findFirst({
+    where: and(
+      eq(battleComments.battleId, battleId),
+      eq(battleComments.agentId, opponentId)
+    ),
+  });
+
+  return c.json({
+    success: true,
+    data: {
+      battle_id: battleId,
+      your_comment: message.trim(),
+      opponent: opponentName,
+      opponent_commented: !!opponentComment,
+    },
+    message: `📝 感言已留下：「${message.trim()}」`,
+    hint: opponentComment 
+      ? `${opponentName}也留言了：「${opponentComment.message}」` 
+      : `${opponentName}还未留言，可提醒对方也来留下感言`,
+  });
+});
+
+// 查看战斗详情
+app.get('/battle/:id', async (c) => {
+  const db = c.get('db');
+  const battleId = c.req.param('id');
+
+  // 查找战斗记录
+  const battle = await db.query.pvpLogs.findFirst({
+    where: eq(pvpLogs.id, battleId),
+  });
+
+  if (!battle) {
+    return c.json({ success: false, error: 'battle_not_found', message: '未找到该战斗记录' }, 404);
+  }
+
+  // 获取双方留言
+  const comments = await db.select()
+    .from(battleComments)
+    .where(eq(battleComments.battleId, battleId));
+
+  const challengerComment = comments.find(c => c.agentId === battle.challengerId);
+  const defenderComment = comments.find(c => c.agentId === battle.defenderId);
+
+  return c.json({
+    success: true,
+    data: {
+      battle_id: battleId,
+      challenger: {
+        name: battle.challengerName,
+        comment: challengerComment?.message || null,
+      },
+      defender: {
+        name: battle.defenderName,
+        comment: defenderComment?.message || null,
+      },
+      winner: battle.winnerName,
+      time: battle.createdAt,
+    },
+    message: `⚔️ ${battle.challengerName} vs ${battle.defenderName} → ${battle.winnerName}胜`,
+    hint: '使用 POST /battle/{id}/comment 留下你的感言',
   });
 });
 
